@@ -16,9 +16,15 @@
 // Strip setup
 // ============================================================================
 
-// DEBUG: single strip for signal integrity testing
+// TESTING: 4 bars + matrix active, WS2801 strips not yet wired up.
+// Matrix must stay at index 4 -- noise.c and panel_pulse.c both hardcode it.
 const StripDef strip_setup[] = {
-    {.num_leds = 142, .position = -0.9f, .length_cm = 100.0f},              // bar_1
+    {.num_leds = 142, .position = -0.9f, .length_cm = 100.0f},              // bar_1 (left outer)
+    {.num_leds = 142, .position = -0.3f, .length_cm = 100.0f},              // bar_2 (left inner)
+    {.num_leds = 142, .position =  0.3f, .length_cm = 100.0f},              // bar_3 (right inner)
+    {.num_leds = 142, .position =  0.9f, .length_cm = 100.0f},              // bar_4 (right outer)
+    {.num_leds = 256, .position =  0.0f, .length_cm = 32.0f,                // matrix (center)
+     .matrix_width = 32, .matrix_height = 8},
 };
 const int NUM_STRIPS = sizeof(strip_setup) / sizeof(strip_setup[0]);
 

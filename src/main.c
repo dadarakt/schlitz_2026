@@ -163,10 +163,12 @@ void app_main(void) {
 
   mux_init();
 
-  // DEBUG: single strip for signal integrity testing
-  //   0  bar_1  → GPIO 22  (WS2812)
+  // TESTING: 4 bars + matrix active, WS2801 strips not yet wired up
+  //   0  bar_1  → GPIO 22   1  bar_2  → GPIO 23
+  //   2  bar_3  → GPIO 4    3  bar_4  → GPIO 15
+  //   4  matrix → GPIO 2
   LedVizConfig config = {
-      .gpio_pins = {22},
+      .gpio_pins = {22, 23, 4, 15, 2},
       .target_fps = 60,
   };
 
