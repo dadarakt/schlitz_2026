@@ -162,16 +162,10 @@ void app_main(void) {
 
   mux_init();
 
-  // GPIO pins in strip_setup[] order:
+  // DEBUG: single strip for signal integrity testing
   //   0  bar_1  → GPIO 22  (WS2812)
-  //   1  bar_2  → GPIO 23  (WS2812)
-  //   2  bar_3  → GPIO  4  (WS2812)
-  //   3  bar_4  → GPIO 15  (WS2812)
-  //   4  matrix → GPIO  2  (WS2812)
-  //   5  strip_1           (WS2801 – not yet supported)
-  //   6  strip_2           (WS2801 – not yet supported)
   LedVizConfig config = {
-      .gpio_pins = {22, 23, 4, 15, 2, 0, 0},
+      .gpio_pins = {22},
       .target_fps = 60,
   };
 
