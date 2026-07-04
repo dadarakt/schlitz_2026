@@ -9,7 +9,7 @@
 // ets_delay_us is always available as an ESP32 ROM function
 extern void ets_delay_us(unsigned int us);
 
-#include "../../led_visualizer/examples/schlitzerei_programs.c"
+#include "../programs.c"
 
 static const char *TAG = "schlitzerei";
 
@@ -182,9 +182,21 @@ void app_main(void) {
 
   led_viz_set_program(0);
   led_viz_set_palette(palettes[0]);
+  led_viz_set_brightness(0); // start dark for fade-in
 
   // Run LED loop in its own task so app_main can poll the mux
   xTaskCreate(led_task, "led", 8192, NULL, 5, NULL);
+
+  // Fade in over ~1 second before handing off to the pot
+#define FADEIN_MS     1000
+#define FADEIN_STEPS  50
+  for (int step = 0; step <= FADEIN_STEPS; step++) {
+    int pot_raw = mux_read_ch(POT_CH);
+    int target  = BRI_MIN + ((4095 - pot_raw) * (BRI_MAX - BRI_MIN)) / 4095;
+    int bri     = (target * step) / FADEIN_STEPS;
+    led_viz_set_brightness((uint8_t)bri);
+    vTaskDelay(pdMS_TO_TICKS(FADEIN_MS / FADEIN_STEPS));
+  }
 
   // Poll mux at ~100 Hz
   while (1) {
