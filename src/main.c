@@ -175,7 +175,7 @@ void app_main(void) {
     return;
   }
 
-  led_viz_set_program(1);
+  led_viz_set_program(0);
   led_viz_set_palette(palettes[0]);
   led_viz_set_brightness(0); // start dark for fade-in
 
