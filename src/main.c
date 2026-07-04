@@ -1,11 +1,13 @@
 #include "led_viz_esp32.h"
-#include <driver/adc.h>
 #include <driver/gpio.h>
+#include <esp_adc/adc_oneshot.h>
 #include <esp_log.h>
-#include <esp_rom/esp_rom_sys.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <stdlib.h>
+
+// ets_delay_us is always available as an ESP32 ROM function
+extern void ets_delay_us(unsigned int us);
 
 #include "../../led_visualizer/examples/schlitzerei_programs.c"
 
@@ -34,7 +36,8 @@ static int current_palette_idx = 0;
 // ============================================================================
 
 #define MUX_SIG_GPIO   35
-#define MUX_SIG_CH     ADC1_CHANNEL_7   // GPIO35 = ADC1 ch7
+#define MUX_ADC_UNIT   ADC_UNIT_1
+#define MUX_ADC_CH     ADC_CHANNEL_7    // GPIO35 = ADC1 ch7
 #define S0_GPIO        25
 #define S1_GPIO        26
 #define S2_GPIO        27
@@ -59,11 +62,15 @@ static void mux_select(uint8_t ch) {
     esp_rom_delay_us(10);   // mux settle
 }
 
+static adc_oneshot_unit_handle_t s_adc_handle;
+
 static int mux_read_ch(uint8_t ch) {
     mux_select(ch);
-    (void)adc1_get_raw(MUX_SIG_CH);   // dummy read to charge S/H cap
-    esp_rom_delay_us(40);
-    return adc1_get_raw(MUX_SIG_CH);
+    int raw = 0;
+    adc_oneshot_read(s_adc_handle, MUX_ADC_CH, &raw); // dummy read to charge S/H cap
+    ets_delay_us(40);
+    adc_oneshot_read(s_adc_handle, MUX_ADC_CH, &raw);
+    return raw;
 }
 
 static void mux_init(void) {
@@ -76,8 +83,14 @@ static void mux_init(void) {
     };
     gpio_config(&io);
 
-    adc1_config_width(ADC_WIDTH_BIT_12);
-    adc1_config_channel_atten(MUX_SIG_CH, ADC_ATTEN_DB_12);
+    adc_oneshot_unit_init_cfg_t unit_cfg = { .unit_id = MUX_ADC_UNIT };
+    adc_oneshot_new_unit(&unit_cfg, &s_adc_handle);
+
+    adc_oneshot_chan_cfg_t chan_cfg = {
+        .atten    = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_12,
+    };
+    adc_oneshot_config_channel(s_adc_handle, MUX_ADC_CH, &chan_cfg);
 }
 
 // ============================================================================

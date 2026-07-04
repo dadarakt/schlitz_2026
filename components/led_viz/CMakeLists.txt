@@ -11,4 +11,6 @@ idf_component_register(
     REQUIRES
         led_strip
         esp_timer
+        esp_adc
+        driver
 )
