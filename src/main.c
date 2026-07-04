@@ -1,0 +1,181 @@
+#include "led_viz_esp32.h"
+#include <driver/adc.h>
+#include <driver/gpio.h>
+#include <esp_log.h>
+#include <esp_rom/esp_rom_sys.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <stdlib.h>
+
+#include "../../led_visualizer/examples/schlitzerei_programs.c"
+
+static const char *TAG = "schlitzerei";
+
+// ============================================================================
+// Palette list
+// ============================================================================
+
+static const Palette16 *palettes[] = {
+    &PALETTE_RAINBOW,
+    &PALETTE_LAVA,
+    &PALETTE_OCEAN,
+    &PALETTE_FOREST,
+    &PALETTE_PARTY,
+    &PALETTE_HEAT,
+    &PALETTE_CLOUD,
+};
+#define NUM_PALETTES ((int)(sizeof(palettes) / sizeof(palettes[0])))
+
+static int current_program_idx = 0;
+static int current_palette_idx = 0;
+
+// ============================================================================
+// Mux configuration  (mirrors MuxCfg in MuxInput.h)
+// ============================================================================
+
+#define MUX_SIG_GPIO   35
+#define MUX_SIG_CH     ADC1_CHANNEL_7   // GPIO35 = ADC1 ch7
+#define S0_GPIO        25
+#define S1_GPIO        26
+#define S2_GPIO        27
+
+// Mux channel assignments
+#define BTN0_CH        2
+#define BTN1_CH        1
+#define BTN2_CH        0
+#define BTN3_CH        3
+#define POT_CH         4
+
+#define PRESS_THRESHOLD  1000   // ADC raw < threshold → pressed (pull-up)
+
+// ============================================================================
+// Mux init / read
+// ============================================================================
+
+static void mux_select(uint8_t ch) {
+    gpio_set_level(S0_GPIO, ch & 0x01);
+    gpio_set_level(S1_GPIO, (ch >> 1) & 0x01);
+    gpio_set_level(S2_GPIO, (ch >> 2) & 0x01);
+    esp_rom_delay_us(10);   // mux settle
+}
+
+static int mux_read_ch(uint8_t ch) {
+    mux_select(ch);
+    (void)adc1_get_raw(MUX_SIG_CH);   // dummy read to charge S/H cap
+    esp_rom_delay_us(40);
+    return adc1_get_raw(MUX_SIG_CH);
+}
+
+static void mux_init(void) {
+    gpio_config_t io = {
+        .pin_bit_mask = (1ULL << S0_GPIO) | (1ULL << S1_GPIO) | (1ULL << S2_GPIO),
+        .mode         = GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io);
+
+    adc1_config_width(ADC_WIDTH_BIT_12);
+    adc1_config_channel_atten(MUX_SIG_CH, ADC_ATTEN_DB_12);
+}
+
+// ============================================================================
+// Button + pot handling  (mirrors MuxInput.cpp logic)
+// ============================================================================
+
+static void mux_update(void) {
+    static bool last_btn[4] = {false, false, false, false};
+    static bool combo_active = false;
+
+    // --- Read raw values ---
+    bool btn[4];
+    for (int i = 0; i < 4; i++) {
+        static const uint8_t ch[4] = {BTN0_CH, BTN1_CH, BTN2_CH, BTN3_CH};
+        btn[i] = (mux_read_ch(ch[i]) < PRESS_THRESHOLD);
+    }
+    int pot_raw = mux_read_ch(POT_CH);
+
+    // --- Pot → brightness (0→255, 4095→30, matching original map()) ---
+    int bri = 255 - ((pot_raw * (255 - 30)) / 4095);
+    if (bri < 30)  bri = 30;
+    if (bri > 255) bri = 255;
+    led_viz_set_brightness((uint8_t)bri);
+
+    // --- Buttons 0 & 1: trigger on RELEASE, detect combo ---
+    if (btn[0] && btn[1]) combo_active = true;
+
+    // Button 0 released
+    if (!btn[0] && last_btn[0]) {
+        if (combo_active && !btn[1]) {
+            // combo: both released → no-op for now (autocycle toggle not yet ported)
+            combo_active = false;
+        } else if (!combo_active) {
+            current_program_idx = (current_program_idx + 1) % NUM_PROGRAMS;
+            led_viz_set_program(current_program_idx);
+            ESP_LOGI(TAG, "Program → %d", current_program_idx);
+        }
+    }
+
+    // Button 1 released
+    if (!btn[1] && last_btn[1]) {
+        if (!combo_active) {
+            current_palette_idx = (current_palette_idx + 1) % NUM_PALETTES;
+            led_viz_set_palette(palettes[current_palette_idx]);
+            ESP_LOGI(TAG, "Palette → %d", current_palette_idx);
+        }
+    }
+
+    for (int i = 0; i < 4; i++) last_btn[i] = btn[i];
+
+    // Button 2 (crowd blinder) and Button 3 (strobe) — not yet ported
+}
+
+// ============================================================================
+// LED task
+// ============================================================================
+
+static void led_task(void *arg) {
+    led_viz_run();   // blocking
+    vTaskDelete(NULL);
+}
+
+// ============================================================================
+// Entry point
+// ============================================================================
+
+void app_main(void) {
+    ESP_LOGI(TAG, "Schlitzerei starting");
+
+    mux_init();
+
+    // GPIO pins in strip_setup[] order:
+    //   0  bar_1  → GPIO 22  (WS2812)
+    //   1  bar_2  → GPIO 23  (WS2812)
+    //   2  bar_3  → GPIO  4  (WS2812)
+    //   3  bar_4  → GPIO 15  (WS2812)
+    //   4  matrix → GPIO  2  (WS2812)
+    //   5  strip_1           (WS2801 – not yet supported)
+    //   6  strip_2           (WS2801 – not yet supported)
+    LedVizConfig config = {
+        .gpio_pins  = {22, 23, 4, 15, 2, 0, 0},
+        .target_fps = 60,
+    };
+
+    if (led_viz_init(&config) != 0) {
+        ESP_LOGE(TAG, "LED init failed");
+        return;
+    }
+
+    led_viz_set_program(0);
+    led_viz_set_palette(palettes[0]);
+
+    // Run LED loop in its own task so app_main can poll the mux
+    xTaskCreate(led_task, "led", 8192, NULL, 5, NULL);
+
+    // Poll mux at ~100 Hz
+    while (1) {
+        mux_update();
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
