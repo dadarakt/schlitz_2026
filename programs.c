@@ -38,17 +38,19 @@ const int NUM_STRIPS = sizeof(strip_setup) / sizeof(strip_setup[0]);
 #include "patterns/wave.c"
 #include "patterns/searchlight.c"
 #include "patterns/count_up.c"
+#include "patterns/gradient_sweep.c"
 
 // ============================================================================
 // Program registry
 // ============================================================================
 
 const Program programs[] = {
-    {"Count Up",    count_up_update,    cu_init, cu_init},
-    {"Noise",       noise_update,       NULL,    NULL   },
-    {"Panel Pulse", panel_pulse_update, pp_init, pp_init},
-    {"Drop",        drop_update,        drop_init, drop_init},
-    {"Wave",        wave_update,        wave_init, wave_init},
-    {"Searchlight", searchlight_update, sl_init, sl_init},
+    {"Count Up",       count_up_update,       cu_init, cu_init},
+    {"Gradient Sweep", gradient_sweep_update, gs_init, gs_init},
+    {"Noise",          noise_update,          NULL,    NULL   },
+    {"Panel Pulse",    panel_pulse_update,    pp_init, pp_init},
+    {"Drop",           drop_update,           drop_init, drop_init},
+    {"Wave",           wave_update,           wave_init, wave_init},
+    {"Searchlight",    searchlight_update,    sl_init, sl_init},
 };
 const int NUM_PROGRAMS = sizeof(programs) / sizeof(programs[0]);
