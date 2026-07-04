@@ -21,7 +21,7 @@ static const char *TAG = "schlitzerei";
 
 static const Palette16 *palettes[] = {
     &PALETTE_LAVA, &PALETTE_OCEAN, &PALETTE_FOREST,
-    &PALETTE_PARTY, &PALETTE_HEAT, &PALETTE_ROSE,
+    &PALETTE_PARTY, &PALETTE_HEAT, &PALETTE_ROSE, &PALETTE_SUNSET,
 };
 #define NUM_PALETTES ((int)(sizeof(palettes) / sizeof(palettes[0])))
 

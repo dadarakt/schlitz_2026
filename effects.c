@@ -47,6 +47,14 @@ static void strobe_render(double time_ms, PixelFunc pixel) {
 #define FLASH_ATTACK_MS 200.0
 #define FLASH_RELEASE_MS 400.0
 
+// How far to push the sampled palette color toward white (0 = untouched,
+// 255 = pure white). All our custom palettes are deliberately moderate
+// brightness/desaturated, so adding a raw sample on top of a pattern using
+// that same palette barely reads as a flash at all -- push it most of the
+// way toward white for a punchy, obviously-different flash while keeping a
+// hint of the palette's hue.
+#define FLASH_WHITEN_AMOUNT 170
+
 static volatile bool flash_held = false;
 static bool flash_color_pending = true; // pick a fresh color on next press
 static float flash_level = 0.0f;        // 0..255 overlay intensity
@@ -54,6 +62,13 @@ static double flash_last_ms = -1.0;
 static RGB flash_color = {255, 255, 255};
 
 void flash_set_held(bool held) { flash_held = held; }
+
+static RGB blend_toward_white(RGB c, uint8_t amount) {
+    c.r = qadd8(c.r, scale8((uint8_t)(255 - c.r), amount));
+    c.g = qadd8(c.g, scale8((uint8_t)(255 - c.g), amount));
+    c.b = qadd8(c.b, scale8((uint8_t)(255 - c.b), amount));
+    return c;
+}
 
 static void flash_render(double time_ms, PixelFunc pixel,
                          GetPixelFunc get_pixel, const Palette16 palette) {
@@ -64,7 +79,8 @@ static void flash_render(double time_ms, PixelFunc pixel,
         // Pick one color per press (not every frame), so a single flash
         // reads as one consistent color rather than flickering hues.
         if (flash_color_pending) {
-            flash_color = palette_sample(palette, (uint8_t)(rand() & 0xFF), 255, true);
+            RGB sampled = palette_sample(palette, (uint8_t)(rand() & 0xFF), 255, true);
+            flash_color = blend_toward_white(sampled, FLASH_WHITEN_AMOUNT);
             flash_color_pending = false;
         }
         if (flash_level < 255.0f) {
