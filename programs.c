@@ -34,6 +34,9 @@ const int NUM_STRIPS = sizeof(strip_setup) / sizeof(strip_setup[0]);
 
 #include "patterns/noise.c"
 #include "patterns/panel_pulse.c"
+#include "patterns/drop.c"
+#include "patterns/wave.c"
+#include "patterns/searchlight.c"
 
 // ============================================================================
 // Program registry
@@ -42,5 +45,8 @@ const int NUM_STRIPS = sizeof(strip_setup) / sizeof(strip_setup[0]);
 const Program programs[] = {
     {"Noise",       noise_update,       NULL,    NULL   },
     {"Panel Pulse", panel_pulse_update, pp_init, pp_init},
+    {"Drop",        drop_update,        drop_init, drop_init},
+    {"Wave",        wave_update,        wave_init, wave_init},
+    {"Searchlight", searchlight_update, sl_init, sl_init},
 };
 const int NUM_PROGRAMS = sizeof(programs) / sizeof(programs[0]);
