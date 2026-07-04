@@ -46,7 +46,8 @@ static int current_palette_idx = 0;
 
 #define PRESS_THRESHOLD 1000 // ADC raw < threshold → pressed (pull-up)
 
-// Brightness range (0–255).  Pot at minimum → BRI_MIN, pot at maximum → BRI_MAX.
+// Brightness range (0–255).  Pot at minimum → BRI_MIN, pot at maximum →
+// BRI_MAX.
 #define BRI_MIN 0
 #define BRI_MAX 100
 
@@ -174,20 +175,27 @@ void app_main(void) {
     return;
   }
 
-  led_viz_set_program(0);
+  led_viz_set_program(1);
   led_viz_set_palette(palettes[0]);
   led_viz_set_brightness(0); // start dark for fade-in
 
-  // Run LED loop in its own task so app_main can poll the mux
-  xTaskCreate(led_task, "led", 8192, NULL, 5, NULL);
+  // Run LED loop in its own task so app_main can poll the mux.
+  // Pinned to core 1: app_main (and its ADC-based mux polling) is pinned to
+  // core 0 (CONFIG_ESP_MAIN_TASK_AFFINITY_CPU0), and classic ESP32's RMT has
+  // no DMA -- it refills its small hardware buffer via interrupt many times
+  // per frame. Without an explicit affinity here, the scheduler could place
+  // this task on core 0 too, and an ADC read delaying that refill interrupt
+  // corrupts whatever bits were mid-flight, splicing a wrong color into a
+  // few LEDs. Keeping it off core 0 entirely avoids the contention.
+  xTaskCreatePinnedToCore(led_task, "led", 8192, NULL, 5, NULL, 1);
 
   // Fade in over ~1 second before handing off to the pot
-#define FADEIN_MS     1000
-#define FADEIN_STEPS  50
+#define FADEIN_MS 1000
+#define FADEIN_STEPS 50
   for (int step = 0; step <= FADEIN_STEPS; step++) {
     int pot_raw = mux_read_ch(POT_CH);
-    int target  = BRI_MIN + ((4095 - pot_raw) * (BRI_MAX - BRI_MIN)) / 4095;
-    int bri     = (target * step) / FADEIN_STEPS;
+    int target = BRI_MIN + ((4095 - pot_raw) * (BRI_MAX - BRI_MIN)) / 4095;
+    int bri = (target * step) / FADEIN_STEPS;
     led_viz_set_brightness((uint8_t)bri);
     vTaskDelay(pdMS_TO_TICKS(FADEIN_MS / FADEIN_STEPS));
   }
