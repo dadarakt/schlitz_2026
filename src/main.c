@@ -2,6 +2,7 @@
 #include <driver/gpio.h>
 #include <esp_adc/adc_oneshot.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <stdlib.h>
@@ -10,6 +11,7 @@
 extern void ets_delay_us(unsigned int us);
 
 #include "../programs.c"
+#include "../effects.c"
 
 static const char *TAG = "schlitzerei";
 
@@ -18,13 +20,58 @@ static const char *TAG = "schlitzerei";
 // ============================================================================
 
 static const Palette16 *palettes[] = {
-    &PALETTE_RAINBOW, &PALETTE_LAVA, &PALETTE_OCEAN, &PALETTE_FOREST,
-    &PALETTE_PARTY,   &PALETTE_HEAT, &PALETTE_CLOUD,
+    &PALETTE_LAVA, &PALETTE_OCEAN, &PALETTE_FOREST,
+    &PALETTE_PARTY, &PALETTE_HEAT, &PALETTE_ROSE,
 };
 #define NUM_PALETTES ((int)(sizeof(palettes) / sizeof(palettes[0])))
 
 static int current_program_idx = 0;
 static int current_palette_idx = 0;
+
+static void advance_program(void) {
+  current_program_idx = (current_program_idx + 1) % NUM_PROGRAMS;
+  led_viz_set_program(current_program_idx);
+  ESP_LOGI(TAG, "Program → %d", current_program_idx);
+}
+
+static void advance_palette(void) {
+  current_palette_idx = (current_palette_idx + 1) % NUM_PALETTES;
+  led_viz_set_palette(palettes[current_palette_idx]);
+  ESP_LOGI(TAG, "Palette → %d", current_palette_idx);
+}
+
+// ============================================================================
+// Automode  (mirrors autoCyclePatterns/autoCyclePalettes in main.cpp, toggled
+// together by the button 0+1 combo)
+// ============================================================================
+
+#define AUTO_CYCLE_PATTERN_MS (177 * 1000)
+#define AUTO_CYCLE_PALETTE_MS (111 * 1000)
+
+static bool auto_cycle_patterns = false;
+static bool auto_cycle_palettes = false;
+static double auto_next_pattern_ms = 0.0;
+static double auto_next_palette_ms = 0.0;
+
+static void auto_mode_toggle(double now_ms) {
+  bool enable = !auto_cycle_patterns; // both flags always move together
+  auto_cycle_patterns = enable;
+  auto_cycle_palettes = enable;
+  auto_next_pattern_ms = now_ms + AUTO_CYCLE_PATTERN_MS;
+  auto_next_palette_ms = now_ms + AUTO_CYCLE_PALETTE_MS;
+  ESP_LOGI(TAG, "Automode → %s", enable ? "on" : "off");
+}
+
+static void auto_mode_update(double now_ms) {
+  if (auto_cycle_patterns && now_ms >= auto_next_pattern_ms) {
+    advance_program();
+    auto_next_pattern_ms = now_ms + AUTO_CYCLE_PATTERN_MS;
+  }
+  if (auto_cycle_palettes && now_ms >= auto_next_palette_ms) {
+    advance_palette();
+    auto_next_palette_ms = now_ms + AUTO_CYCLE_PALETTE_MS;
+  }
+}
 
 // ============================================================================
 // Mux configuration  (mirrors MuxCfg in MuxInput.h)
@@ -102,6 +149,8 @@ static void mux_update(void) {
   static bool last_btn[4] = {false, false, false, false};
   static bool combo_active = false;
 
+  double now_ms = esp_timer_get_time() / 1000.0;
+
   // --- Read raw values ---
   bool btn[4];
   for (int i = 0; i < 4; i++) {
@@ -121,28 +170,35 @@ static void mux_update(void) {
   // Button 0 released
   if (!btn[0] && last_btn[0]) {
     if (combo_active && !btn[1]) {
-      // combo: both released → no-op for now (autocycle toggle not yet ported)
+      // both were held together, now both released → toggle automode
+      auto_mode_toggle(now_ms);
       combo_active = false;
     } else if (!combo_active) {
-      current_program_idx = (current_program_idx + 1) % NUM_PROGRAMS;
-      led_viz_set_program(current_program_idx);
-      ESP_LOGI(TAG, "Program → %d", current_program_idx);
+      advance_program();
     }
   }
 
   // Button 1 released
   if (!btn[1] && last_btn[1]) {
     if (!combo_active) {
-      current_palette_idx = (current_palette_idx + 1) % NUM_PALETTES;
-      led_viz_set_palette(palettes[current_palette_idx]);
-      ESP_LOGI(TAG, "Palette → %d", current_palette_idx);
+      advance_palette();
     }
+  }
+
+  // --- Button 2: Flash (while held) ---
+  if (btn[2] != last_btn[2]) {
+    flash_set_held(btn[2]);
+  }
+
+  // --- Button 3: Strobe (while held) ---
+  if (btn[3] != last_btn[3]) {
+    strobe_set_held(btn[3]);
   }
 
   for (int i = 0; i < 4; i++)
     last_btn[i] = btn[i];
 
-  // Button 2 (crowd blinder) and Button 3 (strobe) — not yet ported
+  auto_mode_update(now_ms);
 }
 
 // ============================================================================
@@ -185,6 +241,7 @@ void app_main(void) {
 
   led_viz_set_program(0);
   led_viz_set_palette(palettes[0]);
+  led_viz_set_overlay(effects_overlay);
   led_viz_set_brightness(0); // start dark for fade-in
 
   // Run LED loop in its own task so app_main can poll the mux.
