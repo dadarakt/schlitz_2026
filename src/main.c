@@ -170,6 +170,12 @@ void app_main(void) {
   LedVizConfig config = {
       .gpio_pins = {22, 23, 4, 15, 2},
       .target_fps = 60,
+      // Cap concurrent RMT refresh to reduce refill-interrupt contention.
+      // 1 = fully sequential (slowest, guaranteed no collisions -- the
+      // pre-parallelization behavior). 5 = fully parallel (fastest, but
+      // showed occasional flicker with all 5 channels active at once).
+      // Retune based on what you see on hardware.
+      .max_concurrent_refresh = 2,
   };
 
   if (led_viz_init(&config) != 0) {
