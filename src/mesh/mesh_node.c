@@ -305,5 +305,8 @@ void mesh_node_start(send_param_t *send_param, QueueHandle_t queue) {
   params->send_param = send_param;
   params->queue = queue;
 
-  xTaskCreate(node_task, "mesh_node", 4096, params, 4, NULL);
+  // Pinned to core 0 -- see mesh_root_start's comment (mesh_root.c) for
+  // why: same reasoning applies here, this board also runs the LED strip
+  // refresh tasks on core 1.
+  xTaskCreatePinnedToCore(node_task, "mesh_node", 4096, params, 4, NULL, 0);
 }

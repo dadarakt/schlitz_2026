@@ -334,11 +334,16 @@ void app_main(void) {
   // led_viz_init skips creating an RMT device for that strip index (see
   // led_viz_esp32.c's gpio_pin==0 handling) rather than treating it as an
   // error.
+  // Matrix moved off GPIO 2 to GPIO 15 -- GPIO 2 is an ESP32 strapping pin
+  // (sampled at boot for flash-mode selection), a plausible contributor to
+  // the matrix-only white-pixel flicker (bars, on ordinary GPIOs, never
+  // showed it). GPIO 15 is free here now that bar4 moved to the node
+  // board (was bar4's pin back when this board drove all 5 strips).
   //   0  bar_1  → (node)    1  bar_2  → GPIO 23
   //   2  bar_3  → GPIO 4    3  bar_4  → (node)
-  //   4  matrix → GPIO 2
+  //   4  matrix → GPIO 15
   LedVizConfig config = {
-      .gpio_pins = {0, 23, 4, 0, 2},
+      .gpio_pins = {0, 23, 4, 0, 15},
       .target_fps = 60,
       .max_concurrent_refresh = 2,
   };

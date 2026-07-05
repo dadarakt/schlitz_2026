@@ -152,7 +152,11 @@ static void root_task(void *pvParameter) {
     vTaskDelete(NULL);
   }
 
-  TickType_t wait_ticks = pdMS_TO_TICKS(MESH_STATE_INTERVAL_MS);
+  // Polls frequently so a state change (button/pot on root) gets noticed
+  // and sent quickly -- MESH_STATE_INTERVAL_MS/ESPNOW_SYNC_INTERVAL_MS/
+  // ESPNOW_DISCOVERY_INTERVAL_MS below are still what actually paces each
+  // kind of broadcast; this just controls how promptly we check them.
+  TickType_t wait_ticks = pdMS_TO_TICKS(MESH_ROOT_POLL_MS);
 
   while (true) {
     BaseType_t got = xQueueReceive(queue, &evt, wait_ticks);
@@ -254,5 +258,13 @@ void mesh_root_start(send_param_t *send_param, QueueHandle_t queue) {
   params->send_param = send_param;
   params->queue = queue;
 
-  xTaskCreate(root_task, "mesh_root", 4096, params, 4, NULL);
+  // Pinned to core 0, away from the LED strip refresh tasks (core 1, see
+  // led_viz_esp32.c and main.c's led_task). Classic ESP32's RMT has no
+  // DMA -- it refills its small hardware buffer via interrupt many times
+  // per transmission, and any same-core work (originally just ADC reads,
+  // now also ESP-NOW send/recv processing) that delays a refill corrupts
+  // whatever bits were mid-flight, splicing a wrong color into a few
+  // LEDs. Plain xTaskCreate() has no core affinity and could otherwise
+  // land this on core 1 at the scheduler's discretion.
+  xTaskCreatePinnedToCore(root_task, "mesh_root", 4096, params, 4, NULL, 0);
 }
