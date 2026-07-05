@@ -7,8 +7,12 @@
 //   - CU_MODE_DOWN:   the mirror image -- fills from the top down instead.
 //   - CU_MODE_RANDOM: segments are randomly turned on/off, refreshed
 //                      periodically, instead of filling in sequence.
-// The whole installation picks a random duration (a handful of seconds) to
-// stay in whatever mode it's in, then all panels switch to a new (usually
+//   - CU_MODE_SLIDE:  a short window of CU_SLIDE_WIDTH_MIN..MAX segments
+//                      (never the whole strip) bounces back and forth
+//                      between the two ends instead of filling/emptying.
+// The whole installation picks a random, deliberately long duration to
+// stay in whatever mode it's in (calm, unhurried counting rather than
+// frequent mode changes), then all panels switch to a new (usually
 // different) mode together and each picks a fresh palette color -- so the
 // installation drifts through different textures over time as one, while
 // individual strips still vary in their own step timing/color so it doesn't
@@ -22,7 +26,10 @@
 // CU_MIN_SEGMENTS and CU_MAX_SEGMENTS and back (see cu_segment_count()), a
 // smooth function of time alone so it stays trivially in sync across
 // multiple mesh-synced boards with no extra state or decisions needed, the
-// same way noise_mod1/mod2 already do.
+// same way noise_mod1/mod2 already do. Only ever takes power-of-two values
+// within that range -- not every integer in between -- so a change always
+// reads as segments cleanly merging together or splitting apart, never an
+// uneven one-at-a-time resize.
 //
 // On 1D strips (bars, WS2801 strips), a segment is a run of LEDs separated
 // by a few pixels of black, computed from the strip's actual LED count. On
@@ -39,8 +46,13 @@
 #include <led_viz.h>
 #include <stdlib.h>
 
-#define CU_MIN_SEGMENTS 2
+#define CU_MIN_SEGMENTS 8
 #define CU_MAX_SEGMENTS 16
+// Both above must be powers of two -- cu_segment_count() only ever steps
+// between them a power of two at a time (8, 16), never any integer in
+// between, so the levels below are just log2(MIN)..log2(MAX).
+#define CU_MIN_LEVEL 3
+#define CU_MAX_LEVEL 4
 // One full MIN->MAX->MIN cycle -- deliberately slow ("breathing"), not
 // something meant to be watched step by step.
 #define CU_SEGMENT_BREATHE_PERIOD_MS 60000.0
@@ -52,9 +64,16 @@
 #define CU_MAX_STEP_MS 260.0
 #define CU_HOLD_FULL_MS 300.0 // brief pause once fully lit, before reset
 
-// How long the whole installation stays in one mode before switching.
-#define CU_MODE_DURATION_MIN_MS 6000.0
-#define CU_MODE_DURATION_MAX_MS 15000.0
+// How long the whole installation stays in one mode before switching --
+// deliberately long/calm rather than quick to change.
+#define CU_MODE_DURATION_MIN_MS 18000.0
+#define CU_MODE_DURATION_MAX_MS 35000.0
+
+// CU_MODE_SLIDE's window width, in segments -- always well short of the
+// whole strip (CU_MIN_SEGMENTS is 8), so it always reads as a short band
+// moving along, never a fill.
+#define CU_SLIDE_WIDTH_MIN 2
+#define CU_SLIDE_WIDTH_MAX 3
 
 // Chance (out of 100) that a given mode cycle also puts every panel into
 // lockstep -- one shared state (color/level/phase) instead of each strip
@@ -76,10 +95,19 @@
 // Indexed directly by strip id (0-3 bars, 4 matrix, 5-6 WS2801 strips)
 #define CU_NUM_STRIP_SLOTS 7
 
-typedef enum { CU_MODE_UP, CU_MODE_DOWN, CU_MODE_RANDOM, CU_MODE_COUNT } CUMode;
+typedef enum {
+    CU_MODE_UP,
+    CU_MODE_DOWN,
+    CU_MODE_RANDOM,
+    CU_MODE_SLIDE,
+    CU_MODE_COUNT
+} CUMode;
 
 typedef struct {
-    int level;             // 0..num_segments currently lit, for UP/DOWN
+    int level;             // 0..num_segments currently lit (UP/DOWN), or the
+                            // window's start position (SLIDE)
+    int direction;          // +1/-1, which way the SLIDE window is currently
+                            // moving (unused by other modes)
     uint16_t random_mask;   // bit i = segment i lit, for RANDOM (up to 16)
     double next_step_ms;    // next count-step / random-refresh time
     RGB color;
@@ -88,6 +116,7 @@ typedef struct {
 static CUStrip cu_state[CU_NUM_STRIP_SLOTS]; // used unless cu_lockstep
 static CUStrip cu_shared_state;              // used while cu_lockstep
 static bool cu_lockstep = false;
+static int cu_slide_width = CU_SLIDE_WIDTH_MIN;
 
 static CUMode cu_global_mode = CU_MODE_UP;
 static double cu_next_mode_change_ms = 0.0;
@@ -97,14 +126,18 @@ static bool cu_times_staggered = false;
 // inherently mesh-sync-safe the same way noise_mod1/mod2 are: any number
 // of boards evaluating this from the same synced clock agree automatically,
 // with no decision to agree on in the first place.
+//
+// The underlying oscillation is still continuous, but it's quantized in
+// log2 space to just the 4 power-of-two levels (2/4/8/16) instead of
+// returning every integer in between -- so segment count only ever moves
+// by a clean merge or split, holding steady at each level in between.
 static int cu_segment_count(double time_ms) {
     double phase = time_ms * (CU_TWO_PI / CU_SEGMENT_BREATHE_PERIOD_MS);
     double t = (sin(phase) + 1.0) * 0.5; // 0..1
-    int n = CU_MIN_SEGMENTS +
-            (int)(t * (CU_MAX_SEGMENTS - CU_MIN_SEGMENTS) + 0.5);
-    if (n < CU_MIN_SEGMENTS) n = CU_MIN_SEGMENTS;
-    if (n > CU_MAX_SEGMENTS) n = CU_MAX_SEGMENTS;
-    return n;
+    int level = CU_MIN_LEVEL + (int)(t * (CU_MAX_LEVEL - CU_MIN_LEVEL) + 0.5);
+    if (level < CU_MIN_LEVEL) level = CU_MIN_LEVEL;
+    if (level > CU_MAX_LEVEL) level = CU_MAX_LEVEL;
+    return 1 << level;
 }
 
 // Compute num_segments segments' (start, length) for a 1D strip of n LEDs,
@@ -217,8 +250,14 @@ static bool cu_pick_lockstep(double seed_ms) {
     return (deterministic_rand(seed_ms, 3) % 100) < CU_LOCKSTEP_CHANCE_PERCENT;
 }
 
+static int cu_pick_slide_width(double seed_ms) {
+    uint32_t span = CU_SLIDE_WIDTH_MAX - CU_SLIDE_WIDTH_MIN + 1;
+    return CU_SLIDE_WIDTH_MIN + (int)(deterministic_rand(seed_ms, 4) % span);
+}
+
 static void cu_reset_strip(CUStrip *s, double time_ms, const Palette16 palette) {
     s->level = 0;
+    s->direction = 1;
     s->random_mask = 0;
     s->color = palette_sample(palette, (uint8_t)(rand() & 0xFF), 255, true);
     s->next_step_ms = time_ms;
@@ -232,6 +271,24 @@ static void cu_advance(CUStrip *s, int strip_id, double time_ms, double mod1,
 
     if (cu_global_mode == CU_MODE_RANDOM) {
         s->random_mask = (uint16_t)(rand() & 0xFFFF);
+        s->next_step_ms = time_ms + step;
+        return;
+    }
+
+    if (cu_global_mode == CU_MODE_SLIDE) {
+        int width = cu_slide_width;
+        if (width > num_segments) width = num_segments;
+        int max_pos = num_segments - width;
+        if (max_pos < 0) max_pos = 0;
+
+        s->level += s->direction;
+        if (s->level >= max_pos) {
+            s->level = max_pos;
+            s->direction = -1;
+        } else if (s->level <= 0) {
+            s->level = 0;
+            s->direction = 1;
+        }
         s->next_step_ms = time_ms + step;
         return;
     }
@@ -254,6 +311,7 @@ static bool cu_segment_lit(const CUStrip *s, int seg, int num_segments) {
         case CU_MODE_UP:     return seg < s->level;
         case CU_MODE_DOWN:   return seg >= (num_segments - s->level);
         case CU_MODE_RANDOM: return (s->random_mask >> seg) & 1;
+        case CU_MODE_SLIDE:  return seg >= s->level && seg < s->level + cu_slide_width;
         default:              return false;
     }
 }
@@ -306,24 +364,31 @@ static void cu_render_matrix(int strip_id, const CUStrip *s, int num_segments,
 static void cu_init(void) {
     for (int i = 0; i < CU_NUM_STRIP_SLOTS; i++) {
         cu_state[i].level = 0;
+        cu_state[i].direction = 1;
         cu_state[i].random_mask = 0;
         cu_state[i].next_step_ms = 0.0;
         cu_state[i].color = (RGB){0, 0, 0};
     }
-    cu_shared_state = (CUStrip){0, 0, 0.0, (RGB){0, 0, 0}};
+    cu_shared_state.level = 0;
+    cu_shared_state.direction = 1;
+    cu_shared_state.random_mask = 0;
+    cu_shared_state.next_step_ms = 0.0;
+    cu_shared_state.color = (RGB){0, 0, 0};
     cu_lockstep = false;
+    cu_slide_width = CU_SLIDE_WIDTH_MIN;
     cu_global_mode = CU_MODE_UP;
     cu_next_mode_change_ms = 0.0;
     cu_times_staggered = false;
 }
 
-// Enters a freshly-picked mode/lockstep choice: resets either every strip
-// independently (each staggered relative to `time_ms`, one reset per k) or
-// the single shared state once, depending on `lockstep`.
-static void cu_enter_cycle(bool lockstep, double time_ms,
+// Enters a freshly-picked mode/lockstep/slide-width choice: resets either
+// every strip independently (each staggered relative to `time_ms`, one
+// reset per k) or the single shared state once, depending on `lockstep`.
+static void cu_enter_cycle(bool lockstep, int slide_width, double time_ms,
                           const int strip_ids[], int active_count,
                           const Palette16 palette) {
     cu_lockstep = lockstep;
+    cu_slide_width = slide_width;
     if (lockstep) {
         cu_reset_strip(&cu_shared_state, time_ms, palette);
     } else {
@@ -354,20 +419,20 @@ static void count_up_update(double time_ms, PixelFunc pixel,
         double seed = quantize_sync_ms(time_ms, CU_SYNC_QUANTIZE_MS);
         cu_global_mode = cu_pick_mode((CUMode)-1, seed);
         cu_next_mode_change_ms = seed + cu_mode_duration(seed);
-        cu_enter_cycle(cu_pick_lockstep(seed), time_ms, strip_ids, active_count,
-                       palette);
+        cu_enter_cycle(cu_pick_lockstep(seed), cu_pick_slide_width(seed), time_ms,
+                       strip_ids, active_count, palette);
         cu_times_staggered = true;
     }
 
-    // All panels switch mode (and re-roll lockstep) together. Seed from the
-    // schedule timestamp just reached (agreed on last cycle), not the
-    // current frame's time_ms -- see shared.h's deterministic_rand.
+    // All panels switch mode (and re-roll lockstep/slide-width) together.
+    // Seed from the schedule timestamp just reached (agreed on last cycle),
+    // not the current frame's time_ms -- see shared.h's deterministic_rand.
     if (time_ms >= cu_next_mode_change_ms) {
         double seed = cu_next_mode_change_ms;
         cu_global_mode = cu_pick_mode(cu_global_mode, seed);
         cu_next_mode_change_ms = seed + cu_mode_duration(seed);
-        cu_enter_cycle(cu_pick_lockstep(seed), time_ms, strip_ids, active_count,
-                       palette);
+        cu_enter_cycle(cu_pick_lockstep(seed), cu_pick_slide_width(seed), time_ms,
+                       strip_ids, active_count, palette);
     }
 
     if (cu_lockstep) {
