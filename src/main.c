@@ -351,6 +351,17 @@ void app_main(void) {
       .target_fps = 60,
       .max_concurrent_refresh = 2,
   };
+#elif defined(CHAIN_NODE)
+  // chain_node: small, mobile, single-strip mesh node (59 LEDs, see
+  // programs.c's strip_setup) -- just follows whatever root broadcasts,
+  // rendered onto its own one strip, to see how a pattern looks
+  // compressed onto a much shorter run.
+  //   0  chain strip → GPIO 25
+  LedVizConfig config = {
+      .gpio_pins = {25},
+      .target_fps = 60,
+      .max_concurrent_refresh = 1,
+  };
 #else
   // Mesh-sync bench test: node drives the two outer bars (bar1, bar4) --
   // see the root branch above for the full split -- plus the two WS2801

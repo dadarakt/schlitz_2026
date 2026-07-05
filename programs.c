@@ -16,6 +16,17 @@
 // Strip setup
 // ============================================================================
 
+#if defined(CHAIN_NODE)
+// chain_node: a small, mobile, single-strip mesh node (59 LEDs) for
+// carrying around and seeing how a pattern looks compressed onto a much
+// shorter run, separate from the fixed installation. It's not spatially
+// part of the bars/matrix layout, so position is just a neutral center
+// value. .length_cm is an estimate (matching the ~1.42 LEDs/cm density
+// used elsewhere) -- adjust once measured.
+const StripDef strip_setup[] = {
+    {.num_leds = 59, .position = 0.0f, .length_cm = 42.0f},                 // chain strip
+};
+#else
 // Matrix must stay at index 4 -- noise.c and panel_pulse.c both hardcode it.
 // strip_1/strip_2 (WS2801, indices 5-6) live on the mesh node board -- see
 // main.c's node LedVizConfig. .position/.length_cm for them are estimates
@@ -30,6 +41,7 @@ const StripDef strip_setup[] = {
     {.num_leds = 50, .position = -1.0f, .length_cm = 35.0f},                // strip_1 (left, WS2801)
     {.num_leds = 50, .position =  1.0f, .length_cm = 35.0f},                // strip_2 (right, WS2801)
 };
+#endif
 const int NUM_STRIPS = sizeof(strip_setup) / sizeof(strip_setup[0]);
 
 // ============================================================================
