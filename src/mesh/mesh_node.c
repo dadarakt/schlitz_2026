@@ -29,6 +29,7 @@
 #include "mesh_config.h"
 #include "ptp_sync.h"
 #include "state_sync.h"
+#include <math.h>
 #include <string.h>
 
 static const char *TAG = "mesh_node";
@@ -81,9 +82,15 @@ static void handle_state_msg(uint8_t *data) {
 
 // --- Disconnected indicator ---
 
-#define OFFLINE_GLIMMER_LEDS 30
-#define OFFLINE_GLIMMER_PEAK 50 // faint -- comes from the color value itself,
-#define OFFLINE_GLIMMER_FLOOR 10 // not from a separate brightness scale
+// Faint amber/orange -- G is ~40% of R, giving an orange hue rather than
+// pure red.
+#define OFFLINE_GLIMMER_PEAK 28 // faint -- comes from the color value itself,
+#define OFFLINE_GLIMMER_FLOOR 5 // not from a separate brightness scale
+#define OFFLINE_GLIMMER_HALF_WIDTH 15.0 // ~30 LEDs wide at the base
+
+// One full up+down traversal of the strip.
+#define OFFLINE_MOVE_PERIOD_MS 4000.0
+#define OFFLINE_PI 3.14159265358979323846
 
 void mesh_node_offline_overlay(double time_ms, PixelFunc pixel,
                                GetPixelFunc get_pixel, const Palette16 palette) {
@@ -96,25 +103,40 @@ void mesh_node_offline_overlay(double time_ms, PixelFunc pixel,
   // down by whatever brightness root last sent before going away.
   led_viz_set_brightness(255);
 
+  // Smooth pendulum motion (sinusoidal ease, not linear) between the two
+  // ends of the strip -- pure function of time, so multiple strips (and,
+  // incidentally, multiple boards) stay in step with no extra state.
+  double phase = fmod(time_ms, OFFLINE_MOVE_PERIOD_MS) / OFFLINE_MOVE_PERIOD_MS; // 0..1
+  double eased = (sin(phase * 2.0 * OFFLINE_PI - OFFLINE_PI / 2.0) + 1.0) * 0.5; // 0..1
+
   int n_strips = get_num_strips();
   for (int s = 0; s < n_strips; s++) {
     int n = get_strip_num_leds(s);
     RGB black = {0, 0, 0};
     for (int i = 0; i < n; i++) pixel(s, i, &black.r, &black.g, &black.b);
 
-    int start = (n - OFFLINE_GLIMMER_LEDS) / 2;
-    if (start < 0) start = 0;
-    int end = start + OFFLINE_GLIMMER_LEDS;
-    if (end > n) end = n;
+    double center = eased * (double)(n - 1);
 
-    for (int i = start; i < end; i++) {
-      // Slow per-pixel flicker (not a uniform pulse) via 1D noise walked
-      // along the strip and across time -- reads as an organic "glimmer"
-      // rather than a steady glow or independent per-pixel sparkle.
+    for (int i = 0; i < n; i++) {
+      double dist = fabs((double)i - center);
+      if (dist >= OFFLINE_GLIMMER_HALF_WIDTH) continue; // stays black
+
+      // Smooth (cosine) falloff from the moving center, not a hard-edged
+      // window -- 1.0 right at center, tapering to 0 at the band's edges.
+      double falloff = 0.5 * (1.0 + cos(OFFLINE_PI * dist / OFFLINE_GLIMMER_HALF_WIDTH));
+
+      // Slow per-pixel flicker on top of the moving envelope, via 1D noise
+      // walked along the strip and across time -- reads as an organic
+      // "glimmer" rather than a steady glow or independent per-pixel
+      // sparkle.
       uint8_t n8 = inoise8((uint16_t)(i * 9), 0, (uint16_t)(time_ms * 0.03));
-      uint8_t r = OFFLINE_GLIMMER_FLOOR +
-                  scale8(n8, OFFLINE_GLIMMER_PEAK - OFFLINE_GLIMMER_FLOOR);
-      uint8_t g = 0, b = 0;
+      uint8_t flicker = OFFLINE_GLIMMER_FLOOR +
+                        scale8(n8, OFFLINE_GLIMMER_PEAK - OFFLINE_GLIMMER_FLOOR);
+      uint8_t level = (uint8_t)(flicker * falloff + 0.5);
+
+      uint8_t r = level;
+      uint8_t g = (uint8_t)(level * 2 / 5); // orange hue
+      uint8_t b = 0;
       pixel(s, i, &r, &g, &b);
     }
   }
