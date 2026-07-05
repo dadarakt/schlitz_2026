@@ -310,8 +310,21 @@ static void node_task(void *pvParameter) {
         break;
       }
 
-      if (state == NODE_STATE_UNCONNECTED && ret == DATA_BROADCAST &&
-          recv_payload_type == PAYLOAD_TYPE_NONE) {
+      if (ret == DATA_BROADCAST && recv_payload_type == PAYLOAD_TYPE_NONE) {
+        // Root only sends these while it doesn't think it has any peers
+        // yet -- fresh boot, or it crashed/restarted (e.g. a brownout)
+        // and its own peer table/has_peers reset, even though *we* never
+        // dropped out of NODE_STATE_CONNECTED (root's outage was shorter
+        // than ESPNOW_NODE_TIMEOUT_MS). Ack unconditionally, regardless
+        // of our own current state -- otherwise a node that still
+        // believes it's connected just ignores these (the state check
+        // used to be UNCONNECTED-only), root never gets its ack, never
+        // sets has_peers, and so never resumes sync/state broadcasts --
+        // a deadlock that only used to break once our own silence
+        // timeout eventually fired and dropped us back to UNCONNECTED.
+        // Re-acking immediately here means a root restart is noticed and
+        // recovered from within one discovery interval instead of up to
+        // ESPNOW_NODE_TIMEOUT_MS.
         ESP_LOGI(TAG, "Received broadcast from root " MACSTR,
                  MAC2STR(recv_cb->mac_addr));
         if (handle_root_broadcast(send_param, recv_cb->mac_addr)) {

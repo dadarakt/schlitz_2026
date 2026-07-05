@@ -3,8 +3,12 @@
 // divided into a number of "segments" and all of them run the SAME mode at
 // once, switching together over time:
 //   - CU_MODE_UP:     segments fill in sequence from the bottom, hold
-//                      briefly once full, then reset to empty and repeat.
-//   - CU_MODE_DOWN:   the mirror image -- fills from the top down instead.
+//                      briefly once full, then empty again one at a time
+//                      in the *same* direction (bottom segment -- the
+//                      first one lit -- is also the first to go dark),
+//                      before repeating.
+//   - CU_MODE_DOWN:   the mirror image -- fills and empties from the top
+//                      down instead.
 //   - CU_MODE_RANDOM: segments are randomly turned on/off, refreshed
 //                      periodically, instead of filling in sequence.
 //   - CU_MODE_SLIDE:  a short window of CU_SLIDE_WIDTH_MIN..MAX segments
@@ -140,33 +144,14 @@ static int cu_segment_count(double time_ms) {
     return 1 << level;
 }
 
-// Compute num_segments segments' (start, length) for a 1D strip of n LEDs,
-// with CU_GAP_PIXELS of black between each and any remainder pixels spread
-// across segments so the strip is used edge to edge. Falls back to no gaps
-// at all if the strip is too short to fit full gaps.
-static void cu_compute_segments(int n, int num_segments,
-                                int starts[CU_MAX_SEGMENTS],
-                                int lens[CU_MAX_SEGMENTS]) {
-    int gap = CU_GAP_PIXELS;
-    int available = n - gap * (num_segments - 1);
-    if (available < num_segments) {
-        available = n;
-        gap = 0;
-    }
-    int base = available / num_segments;
-    int extra = available % num_segments;
-    int pos = 0;
-    for (int i = 0; i < num_segments; i++) {
-        int len = base + (i < extra ? 1 : 0);
-        starts[i] = pos;
-        lens[i] = len;
-        pos += len + gap;
-    }
-}
-
 // Splits `total` into `count` spans of near-equal length, separated by
-// `gap` pixels, falling back to no gap if too short to fit. Used for both
-// the matrix's columns and its rows.
+// `gap` pixels, falling back to no gap if too short to fit. Any leftover
+// pixels (total isn't evenly divisible by count) are spread across the
+// whole run via a running boundary (span i ends at
+// round((i+1)*available/count)) rather than piled onto the first few
+// spans -- otherwise one edge (the low-index side) always ends up
+// visibly wider than the rest, which is noticeable when spans are only a
+// few pixels each (e.g. the matrix's patch columns).
 static void cu_split_with_gap(int total, int count, int gap, int *starts,
                               int *lens) {
     int available = total - gap * (count - 1);
@@ -174,15 +159,25 @@ static void cu_split_with_gap(int total, int count, int gap, int *starts,
         available = total;
         gap = 0;
     }
-    int base = available / count;
-    int extra = available % count;
     int pos = 0;
+    int prev_boundary = 0;
     for (int i = 0; i < count; i++) {
-        int len = base + (i < extra ? 1 : 0);
+        int boundary = (int)((int64_t)(i + 1) * available / count);
+        int len = boundary - prev_boundary;
         starts[i] = pos;
         lens[i] = len;
         pos += len + gap;
+        prev_boundary = boundary;
     }
+}
+
+// Compute num_segments segments' (start, length) for a 1D strip of n LEDs,
+// with CU_GAP_PIXELS of black between each -- just cu_split_with_gap with
+// the strip's own gap constant.
+static void cu_compute_segments(int n, int num_segments,
+                                int starts[CU_MAX_SEGMENTS],
+                                int lens[CU_MAX_SEGMENTS]) {
+    cu_split_with_gap(n, num_segments, CU_GAP_PIXELS, starts, lens);
 }
 
 // Compute the matrix's num_segments patches as a grid: 1 row of simple
@@ -294,22 +289,40 @@ static void cu_advance(CUStrip *s, int strip_id, double time_ms, double mod1,
     }
 
     // UP / DOWN share this same counting state machine; only rendering
-    // interprets `level` differently depending on direction.
-    if (s->level >= num_segments) {
+    // (cu_segment_lit) interprets `level` differently depending on
+    // direction. `level` runs 0..2*num_segments: 0..num_segments fills
+    // (one more segment lights each step, holding briefly once full),
+    // num_segments..2*num_segments empties (one segment darkens each
+    // step, in the *same* order they lit -- first lit, first dark --
+    // rather than an instant all-at-once reset).
+    int max_level = 2 * num_segments;
+    if (s->level >= max_level) {
         s->level = 0;
         s->color = palette_sample(palette, (uint8_t)(rand() & 0xFF), 255, true);
         s->next_step_ms = time_ms + step;
     } else {
         s->level++;
-        s->next_step_ms =
-            time_ms + (s->level >= num_segments ? CU_HOLD_FULL_MS : step);
+        bool just_reached_full = (s->level == num_segments);
+        s->next_step_ms = time_ms + (just_reached_full ? CU_HOLD_FULL_MS : step);
     }
+}
+
+// idx is a segment's position in its mode's fill order (0 = lights
+// first); shared by UP and DOWN so the emptying phase can turn segments
+// off in that same first-lit-first-dark order, using one formula: lit
+// while idx has been reached (idx < level) but not yet passed by the
+// draining edge (idx >= level - num_segments, only binding once level
+// exceeds num_segments -- see cu_advance).
+static bool cu_fill_order_lit(int idx, int level, int num_segments) {
+    return idx < level && idx >= level - num_segments;
 }
 
 static bool cu_segment_lit(const CUStrip *s, int seg, int num_segments) {
     switch (cu_global_mode) {
-        case CU_MODE_UP:     return seg < s->level;
-        case CU_MODE_DOWN:   return seg >= (num_segments - s->level);
+        case CU_MODE_UP:
+            return cu_fill_order_lit(seg, s->level, num_segments);
+        case CU_MODE_DOWN:
+            return cu_fill_order_lit(num_segments - 1 - seg, s->level, num_segments);
         case CU_MODE_RANDOM: return (s->random_mask >> seg) & 1;
         case CU_MODE_SLIDE:  return seg >= s->level && seg < s->level + cu_slide_width;
         default:              return false;
