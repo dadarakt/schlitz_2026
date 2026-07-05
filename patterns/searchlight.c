@@ -9,13 +9,15 @@
 //
 // Two layers: a constantly-running palette-driven "glimmer" texture on
 // every strip (fully overwritten each frame -- no persistent fade needed,
-// unlike noise/drop/wave), with an intermittent white searchlight beam
-// swept additively on top, active for random 10-20s stretches separated by
-// random 10-20s gaps. Within an active stretch, the beam swings side to
-// side between bar1 and bar4 with a cosine ease (naturally slower near each
-// side, fastest through the matrix in the middle), each one-way swing
-// randomized so round trips land around 3-5s without repeating a fixed
-// period.
+// unlike noise/drop/wave; deliberately slow-moving -- see the small time
+// factors in sl_glimmer_1d/sl_glimmer_matrix -- so it reads as a slow
+// shimmer rather than a hectic flicker), with an intermittent white
+// searchlight beam swept additively on top, active for random 10-20s
+// stretches separated by random 10-20s gaps. Within an active stretch, the
+// beam swings side to side between bar1 and bar4 with a cosine ease
+// (naturally slower near each side, fastest through the matrix in the
+// middle), each one-way swing randomized so round trips land around 3-5s
+// without repeating a fixed period.
 
 #include "shared.h"
 #include <led_viz.h>
@@ -72,7 +74,7 @@ static void sl_glimmer_1d(int strip_id, int offset, double time_ms,
     // final well-defined narrowing truncation -- avoids UB from an
     // out-of-range float-to-uint16_t conversion on long uptimes.
     uint16_t t_noise = (uint16_t)(uint32_t)((double)t_fast *
-        (0.020 + 0.020 * ((mod1 + 1.0) * 0.5)));
+        (0.016 + 0.016 * ((mod1 + 1.0) * 0.5)));
     uint8_t scroll = (uint8_t)(t_fast >> 5);
 
     for (int i = 0; i < n; i++) {
@@ -82,7 +84,7 @@ static void sl_glimmer_1d(int strip_id, int offset, double time_ms,
         // has the 3D form, so we fix the 3rd axis at 0 -- still smooth
         // Perlin noise, just not bit-identical to FastLED's dedicated 2D path.
         uint8_t n8 = inoise8(x, t_noise, 0);
-        uint8_t hf = sl_sin8((uint8_t)(i * 7 + (t_fast >> 2))); // shimmer
+        uint8_t hf = sl_sin8((uint8_t)(i * 7 + (t_fast >> 3))); // shimmer
 
         int v16 = (int)n8 + (hf >> 2);
         if (v16 > 255) v16 = 255;
@@ -108,7 +110,7 @@ static void sl_glimmer_matrix(double time_ms, double mod1,
 
     uint32_t t_fast = (uint32_t)time_ms;
     uint16_t t_noise = (uint16_t)(uint32_t)((double)t_fast *
-        (0.018 + 0.022 * ((mod1 + 1.0) * 0.5)));
+        (0.0144 + 0.0176 * ((mod1 + 1.0) * 0.5)));
     uint8_t scroll = (uint8_t)(t_fast >> 5);
 
     for (int x = 0; x < width; x++) {
@@ -117,7 +119,7 @@ static void sl_glimmer_matrix(double time_ms, double mod1,
             uint16_t ny = (uint16_t)(y * 19);
 
             uint8_t n8 = inoise8(nx, ny, t_noise);
-            uint8_t hf = sl_sin8((uint8_t)(x * 9 + y * 11 + (t_fast >> 2)));
+            uint8_t hf = sl_sin8((uint8_t)(x * 9 + y * 11 + (t_fast >> 3)));
 
             int v16 = (int)n8 + (hf >> 3); // lighter ripple on matrix
             if (v16 > 255) v16 = 255;
