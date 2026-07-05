@@ -299,20 +299,49 @@ void app_main(void) {
   mux_init();
 #endif
 
-  // TESTING: 4 bars + matrix active, WS2801 strips not yet wired up
+  // Cap concurrent RMT refresh to reduce refill-interrupt contention.
+  // 1 = fully sequential (slowest, guaranteed no collisions -- the
+  // pre-parallelization behavior). 5 = fully parallel (fastest, but
+  // showed occasional flicker with all 5 channels active at once).
+  // Retune based on what you see on hardware.
+#if !defined(MESH_ENABLED)
+  // Default single-board build: all 4 bars + matrix on one board, WS2801
+  // strips not yet wired up.
   //   0  bar_1  → GPIO 22   1  bar_2  → GPIO 23
   //   2  bar_3  → GPIO 4    3  bar_4  → GPIO 15
   //   4  matrix → GPIO 2
   LedVizConfig config = {
       .gpio_pins = {22, 23, 4, 15, 2},
       .target_fps = 60,
-      // Cap concurrent RMT refresh to reduce refill-interrupt contention.
-      // 1 = fully sequential (slowest, guaranteed no collisions -- the
-      // pre-parallelization behavior). 5 = fully parallel (fastest, but
-      // showed occasional flicker with all 5 channels active at once).
-      // Retune based on what you see on hardware.
       .max_concurrent_refresh = 2,
   };
+#elif IS_ROOT
+  // Mesh-sync bench test: root keeps the matrix + the two inner bars
+  // (bar2, bar3). The two outer bars (bar1, bar4) are physically
+  // separated onto the node board instead -- 0 means "no hardware here",
+  // led_viz_init skips creating an RMT device for that strip index (see
+  // led_viz_esp32.c's gpio_pin==0 handling) rather than treating it as an
+  // error.
+  //   0  bar_1  → (node)    1  bar_2  → GPIO 23
+  //   2  bar_3  → GPIO 4    3  bar_4  → (node)
+  //   4  matrix → GPIO 2
+  LedVizConfig config = {
+      .gpio_pins = {0, 23, 4, 0, 2},
+      .target_fps = 60,
+      .max_concurrent_refresh = 2,
+  };
+#else
+  // Mesh-sync bench test: node drives just the two outer bars (bar1,
+  // bar4) -- see the root branch above for the full split.
+  //   0  bar_1  → GPIO 22   1  bar_2  → (root)
+  //   2  bar_3  → (root)    3  bar_4  → GPIO 15
+  //   4  matrix → (root)
+  LedVizConfig config = {
+      .gpio_pins = {22, 0, 0, 15, 0},
+      .target_fps = 60,
+      .max_concurrent_refresh = 2,
+  };
+#endif
 
   if (led_viz_init(&config) != 0) {
     ESP_LOGE(TAG, "LED init failed");
