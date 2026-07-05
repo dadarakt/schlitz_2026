@@ -81,30 +81,42 @@ static void advance_palette(void) {
 // mesh_node_start() (and hence ever reaches this function) when is_root is
 // false, so it's simply dead code on a root board, never invoked.
 //
-// While not connected, brightness is dimmed to NODE_UNSYNCED_DIM_SCALE/255
-// of whatever it would otherwise be -- a soft cue for whoever is setting up
-// or debugging the installation (out-of-range root, root not started yet,
-// root mid-restart) without being jarring for an actual audience: the
-// program/palette itself never changes because of connectivity, only its
-// brightness does.
+// `connected` isn't used for dimming here anymore -- the disconnected case
+// now has a dedicated, unmissable indicator instead of a soft brightness
+// cue: see mesh_node_offline_overlay (mesh/mesh_node.c), which fully
+// overrides the display with a faint red glimmer while disconnected, and
+// is composed into the node's overlay below. Kept in the signature since
+// mesh_node.c still needs to tell us when a re-apply is just the
+// disconnect case (same program/palette/brightness as before) vs a real
+// state change.
 // ============================================================================
 
 #ifdef MESH_ENABLED
-#define NODE_UNSYNCED_DIM_SCALE 100 // out of 255, ~40%
-
 void mesh_node_apply_state(uint8_t program_idx, uint8_t palette_idx,
                            uint8_t brightness, bool connected) {
+  (void)connected;
   if (program_idx < NUM_PROGRAMS) {
     led_viz_set_program(program_idx);
   }
   if (palette_idx < NUM_PALETTES) {
     led_viz_set_palette(palettes[palette_idx]);
   }
-  uint8_t effective =
-      connected ? brightness : scale8(brightness, NODE_UNSYNCED_DIM_SCALE);
-  led_viz_set_brightness(effective);
+  led_viz_set_brightness(brightness);
+}
+
+#if !IS_ROOT
+// Node builds compose the normal effects overlay (strobe/flash -- currently
+// always a no-op here, since those buttons only exist on root, but kept in
+// case they're ever synced to the node too) with the disconnected-state
+// glimmer, which runs after and fully overrides the display when this node
+// has no connection to root.
+static void node_overlay(double time_ms, PixelFunc pixel, GetPixelFunc get_pixel,
+                         const Palette16 palette) {
+  effects_overlay(time_ms, pixel, get_pixel, palette);
+  mesh_node_offline_overlay(time_ms, pixel, get_pixel, palette);
 }
 #endif
+#endif // MESH_ENABLED
 
 // ============================================================================
 // Automode  (mirrors autoCyclePatterns/autoCyclePalettes in main.cpp, toggled
@@ -354,7 +366,11 @@ void app_main(void) {
 
   led_viz_set_program(0);
   led_viz_set_palette(palettes[0]);
+#if defined(MESH_ENABLED) && !IS_ROOT
+  led_viz_set_overlay(node_overlay);
+#else
   led_viz_set_overlay(effects_overlay);
+#endif
   led_viz_set_brightness(0); // start dark for fade-in
 
   // Run LED loop in its own task so app_main can poll the mux (or, on a

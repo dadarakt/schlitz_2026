@@ -54,7 +54,14 @@ static uint8_t s_program_idx = NODE_DEFAULT_PROGRAM_IDX;
 static uint8_t s_palette_idx = NODE_DEFAULT_PALETTE_IDX;
 static uint8_t s_brightness = NODE_DEFAULT_BRIGHTNESS;
 
+// Read by mesh_node_offline_overlay (runs in the LED task) -- written by
+// node_task on every connect/disconnect transition. Plain volatile bool,
+// matching the read/write-from-different-tasks pattern effects.c already
+// uses for strobe_held/flash_held.
+static volatile bool s_connected = false;
+
 static void apply_current(bool connected) {
+  s_connected = connected;
   mesh_node_apply_state(s_program_idx, s_palette_idx, s_brightness, connected);
 }
 
@@ -66,6 +73,47 @@ static void handle_state_msg(uint8_t *data) {
   s_palette_idx = msg->palette_idx;
   s_brightness = msg->brightness;
   apply_current(true);
+}
+
+// --- Disconnected indicator ---
+
+#define OFFLINE_GLIMMER_LEDS 30
+#define OFFLINE_GLIMMER_PEAK 50 // faint -- comes from the color value itself,
+#define OFFLINE_GLIMMER_FLOOR 10 // not from a separate brightness scale
+
+void mesh_node_offline_overlay(double time_ms, PixelFunc pixel,
+                               GetPixelFunc get_pixel, const Palette16 palette) {
+  (void)get_pixel;
+  (void)palette;
+  if (s_connected) return;
+
+  // Full global brightness while showing this -- the glimmer's own
+  // faintness (OFFLINE_GLIMMER_PEAK/FLOOR) shouldn't be further scaled
+  // down by whatever brightness root last sent before going away.
+  led_viz_set_brightness(255);
+
+  int n_strips = get_num_strips();
+  for (int s = 0; s < n_strips; s++) {
+    int n = get_strip_num_leds(s);
+    RGB black = {0, 0, 0};
+    for (int i = 0; i < n; i++) pixel(s, i, &black.r, &black.g, &black.b);
+
+    int start = (n - OFFLINE_GLIMMER_LEDS) / 2;
+    if (start < 0) start = 0;
+    int end = start + OFFLINE_GLIMMER_LEDS;
+    if (end > n) end = n;
+
+    for (int i = start; i < end; i++) {
+      // Slow per-pixel flicker (not a uniform pulse) via 1D noise walked
+      // along the strip and across time -- reads as an organic "glimmer"
+      // rather than a steady glow or independent per-pixel sparkle.
+      uint8_t n8 = inoise8((uint16_t)(i * 9), 0, (uint16_t)(time_ms * 0.03));
+      uint8_t r = OFFLINE_GLIMMER_FLOOR +
+                  scale8(n8, OFFLINE_GLIMMER_PEAK - OFFLINE_GLIMMER_FLOOR);
+      uint8_t g = 0, b = 0;
+      pixel(s, i, &r, &g, &b);
+    }
+  }
 }
 
 // --- Time sync state and helpers ---

@@ -21,7 +21,7 @@
 #define ESPNOW_SYNC_INTERVAL_MS 5000 // Root broadcasts clock sync this often
 #define ESPNOW_DISCOVERY_INTERVAL_MS                                          \
   2000                               // Root broadcasts discovery this often
-#define ESPNOW_NODE_TIMEOUT_MS 15000 // Node resets if no sync for this long
+#define ESPNOW_NODE_TIMEOUT_MS 10000 // Node resets if no sync for this long
 
 // Root re-broadcasts program/palette/brightness this often even without a
 // change, so a late-joining or reconnecting node converges on current state
