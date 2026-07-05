@@ -2,8 +2,12 @@
 // prototype:
 //   - sync_handle_delay_resp() feeds the computed offset straight into
 //     led_viz_set_clock_offset_us() instead of connected-leds' own
-//     update_led() status indicator (see mesh_root.c's header comment for
-//     why no epoch bookkeeping is needed beyond that).
+//     update_led() status indicator.
+//   - sync_handle_delay_resp() now computes that offset via the full
+//     4-timestamp PTP formula (using t_4, previously received but
+//     discarded) instead of a 2-timestamp round-trip approximation -- see
+//     mesh_root.c's header comment for why the original approximation had
+//     a steady bias rather than random jitter.
 //   - Handles the new PAYLOAD_TYPE_STATE broadcast (program/palette/
 //     brightness), applying it via mesh_node_apply_state() (implemented in
 //     main.c, since only application code knows about palettes[]/NUM_*).
@@ -151,7 +155,6 @@ static void sync_handle_sync_msg(sync_state_t *ss, send_param_t *send_param,
 
 // Returns true if the response was valid and sync was applied.
 static bool sync_handle_delay_resp(sync_state_t *ss, uint8_t *data) {
-  int64_t t5 = esp_timer_get_time();
   espnow_data_t *buf = (espnow_data_t *)data;
   delay_response_t *dresp = (delay_response_t *)buf->payload;
 
@@ -161,15 +164,21 @@ static bool sync_handle_delay_resp(sync_state_t *ss, uint8_t *data) {
     return false;
   }
 
-  int64_t rtt = t5 - ss->pending_t3;
-  int64_t one_way = rtt / 2;
-  // pending_t1 is root's own elapsed-SDK-clock reading (see mesh_root.c),
-  // so this offset can be applied directly -- no separate epoch alignment
-  // needed.
-  int64_t clock_offset_us = (ss->pending_t1 + one_way) - ss->pending_t2;
+  // Full 4-timestamp PTP offset: t_1/t_4 are root's elapsed-SDK-clock
+  // readings (send SYNC / receive DELAY_REQ -- see mesh_root.c), t_2/t_3
+  // are this board's own raw clock readings (receive SYNC / send
+  // DELAY_REQ). This cancels a *symmetric* one-way delay by construction,
+  // unlike the previous "half of a separately-measured round trip"
+  // approximation, which had no way to account for any asymmetry between
+  // the root->node and node->root legs (e.g. ESP-NOW's receive callback
+  // running inside the driver's own dispatch task before reaching our
+  // queue) and so carried a steady bias rather than random jitter.
+  int64_t clock_offset_us =
+      ((ss->pending_t1 + dresp->t_4) - (ss->pending_t2 + ss->pending_t3)) / 2;
 
-  ESP_LOGI(TAG, "Sync id=%lu rtt=%lld us one_way=%lld us offset=%lld us",
-           (unsigned long)ss->pending_sync_id, rtt, one_way, clock_offset_us);
+  ESP_LOGI(TAG, "Sync id=%lu t1=%lld t2=%lld t3=%lld t4=%lld offset=%lld us",
+           (unsigned long)ss->pending_sync_id, ss->pending_t1, ss->pending_t2,
+           ss->pending_t3, dresp->t_4, clock_offset_us);
 
   led_viz_set_clock_offset_us(clock_offset_us);
   ss->synced = true;

@@ -15,6 +15,19 @@
 //     forever means that's the only way it gets back in. Any join/rejoin
 //     ack also now unconditionally forces an immediate sync + state
 //     resend, not just the very first one.
+//   - sync_handle_delay_req()'s t_4 now also uses led_viz_get_elapsed_us()
+//     (was raw esp_timer_get_time()): the node now runs the full
+//     4-timestamp PTP offset formula (mesh_node.c), which mixes t_1 and
+//     t_4 together, so both need the same reference epoch. The original
+//     prototype's simplified 2-timestamp round-trip approximation (using
+//     only t_1/t_2/t_3/t_5, discarding t_4 entirely) had a systematic
+//     bias: it estimated the SYNC message's one-way delay as half of a
+//     *separately measured* round trip (the delay-request/response
+//     exchange), which doesn't cancel out any asymmetry between the
+//     root->node and node->root legs -- e.g. ESP-NOW's receive callback
+//     runs inside the driver's own dispatch task before handing off to
+//     our queue, adding a consistent one-directional hop of latency. That
+//     showed up as a steady few-ms lag on the node rather than jitter.
 // The original's status-LED (update_led()) calls are dropped -- root's own
 // bars already show the normal pattern regardless of peer connectivity, so
 // there's nothing extra to indicate here.
@@ -99,7 +112,11 @@ static void sync_handle_delay_req(send_param_t *send_param, uint8_t *data,
   // Temporarily switch to unicast for this node
   memcpy(send_param->dest_mac, node_mac, ESP_NOW_ETH_ALEN);
 
-  delay_response_t dresp = {.t_4 = esp_timer_get_time(),
+  // Same elapsed-SDK-clock basis as t_1 in sync_send() (not raw
+  // esp_timer_get_time()) -- sync_handle_delay_resp on the node now mixes
+  // t_1 and t_4 in one offset formula, so they need to share a reference
+  // epoch for that arithmetic to be meaningful.
+  delay_response_t dresp = {.t_4 = led_viz_get_elapsed_us(),
                             .sync_id = req_sync_id};
   espnow_data_prepare_payload(send_param, PAYLOAD_TYPE_DELAY_RESP, &dresp,
                               sizeof(dresp));
