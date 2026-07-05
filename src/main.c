@@ -283,9 +283,13 @@ static void mux_update(void) {
 #if defined(MESH_ENABLED) && IS_ROOT
   // Keep the other board's mesh_root_notify_state up to date -- cheap to
   // call every tick, it only actually broadcasts on change (or its own
-  // periodic resend timer).
+  // periodic resend timer). Flash rides along too, so the node mirrors
+  // root's exact flash color instead of picking its own.
+  RGB flash_color = flash_get_color();
   mesh_root_notify_state((uint8_t)current_program_idx,
-                         (uint8_t)current_palette_idx, (uint8_t)bri);
+                         (uint8_t)current_palette_idx, (uint8_t)bri,
+                         flash_is_held(), flash_color.r, flash_color.g,
+                         flash_color.b);
 #endif
 }
 

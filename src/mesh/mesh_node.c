@@ -11,6 +11,10 @@
 //   - Handles the new PAYLOAD_TYPE_STATE broadcast (program/palette/
 //     brightness), applying it via mesh_node_apply_state() (implemented in
 //     main.c, since only application code knows about palettes[]/NUM_*).
+//     Flash state rides along in the same message but is applied directly
+//     via effects.h's flash_apply_remote(), bypassing mesh_node_apply_state
+//     entirely -- flash is momentary, not part of the "current program"
+//     concept that gets cached and re-applied on disconnect.
 //   - Default/degraded state handling: this node always has *some*
 //     program/palette/brightness applied, even before ever hearing from
 //     root (fresh boot, root not yet in range) or after losing contact
@@ -18,6 +22,7 @@
 //     apply_current() below and the NODE_DEFAULT_* constants.
 
 #include "mesh_node.h"
+#include "../../effects.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_now.h"
@@ -78,6 +83,9 @@ static void handle_state_msg(uint8_t *data) {
   s_palette_idx = msg->palette_idx;
   s_brightness = msg->brightness;
   apply_current(true);
+
+  RGB flash_color = {msg->flash_r, msg->flash_g, msg->flash_b};
+  flash_apply_remote(msg->flash_held != 0, flash_color);
 }
 
 // --- Disconnected indicator ---
@@ -278,6 +286,10 @@ static void node_task(void *pvParameter) {
       state = NODE_STATE_UNCONNECTED;
       memset(&ss, 0, sizeof(ss));
       apply_current(false);
+      // Don't leave a flash stuck on if root disappears mid-press -- the
+      // offline overlay fully overrides the display anyway, but this keeps
+      // state consistent for the moment before it kicks in.
+      flash_apply_remote(false, (RGB){0, 0, 0});
       continue;
     }
 

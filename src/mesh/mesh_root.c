@@ -4,10 +4,12 @@
 //     SDK animation clock) instead of the raw esp_timer_get_time(), so the
 //     offset the node derives from the exchange can be fed straight into
 //     led_viz_set_clock_offset_us() with no extra epoch bookkeeping.
-//   - A program/palette/brightness "state" broadcast rides alongside the
-//     existing clock sync: sent immediately when mesh_root_notify_state()
+//   - A program/palette/brightness/flash "state" broadcast rides alongside
+//     the existing clock sync: sent immediately when mesh_root_notify_state()
 //     reports a change, and re-sent periodically regardless so a
 //     late-joining or reconnecting node picks up current state quickly.
+//     Flash's exact computed color rides along too (see state_sync.h) so
+//     the node reproduces it exactly instead of sampling its own.
 //   - Discovery broadcasts keep flowing periodically even after a peer has
 //     joined (not just while has_peers is false, which only ever happens
 //     once): a node that reboots comes back up waiting specifically for
@@ -53,20 +55,31 @@ typedef struct {
   QueueHandle_t queue;
 } root_task_params_t;
 
-// --- State broadcast (program/palette/brightness) ---
+// --- State broadcast (program/palette/brightness/flash) ---
 
 static volatile uint8_t s_program_idx = 0;
 static volatile uint8_t s_palette_idx = 0;
 static volatile uint8_t s_brightness = 0;
+static volatile uint8_t s_flash_held = 0;
+static volatile uint8_t s_flash_r = 0;
+static volatile uint8_t s_flash_g = 0;
+static volatile uint8_t s_flash_b = 0;
 static volatile bool s_state_dirty = true; // broadcast once on startup
 
 void mesh_root_notify_state(uint8_t program_idx, uint8_t palette_idx,
-                            uint8_t brightness) {
+                            uint8_t brightness, bool flash_held,
+                            uint8_t flash_r, uint8_t flash_g, uint8_t flash_b) {
+  uint8_t fh = flash_held ? 1 : 0;
   if (program_idx != s_program_idx || palette_idx != s_palette_idx ||
-      brightness != s_brightness) {
+      brightness != s_brightness || fh != s_flash_held ||
+      flash_r != s_flash_r || flash_g != s_flash_g || flash_b != s_flash_b) {
     s_program_idx = program_idx;
     s_palette_idx = palette_idx;
     s_brightness = brightness;
+    s_flash_held = fh;
+    s_flash_r = flash_r;
+    s_flash_g = flash_g;
+    s_flash_b = flash_b;
     s_state_dirty = true;
   }
 }
@@ -77,6 +90,10 @@ static void state_send(send_param_t *send_param) {
       .program_idx = s_program_idx,
       .palette_idx = s_palette_idx,
       .brightness = s_brightness,
+      .flash_held = s_flash_held,
+      .flash_r = s_flash_r,
+      .flash_g = s_flash_g,
+      .flash_b = s_flash_b,
   };
   espnow_data_prepare_payload(send_param, PAYLOAD_TYPE_STATE, &msg,
                               sizeof(msg));
