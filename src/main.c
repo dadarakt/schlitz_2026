@@ -352,17 +352,29 @@ void app_main(void) {
       .max_concurrent_refresh = 2,
   };
 #else
-  // Mesh-sync bench test: node drives just the two outer bars (bar1,
-  // bar4) -- see the root branch above for the full split. Pins 25/26
-  // (not 22/15) per physical wiring constraints -- needed to land on the
-  // same side as the 5V input pin. Safe to reuse here: the mux code
-  // (which normally claims GPIO 25/26 as S0/S1 on root) is compiled out
-  // entirely for the node build.
-  //   0  bar_1  → GPIO 25   1  bar_2  → (root)
-  //   2  bar_3  → (root)    3  bar_4  → GPIO 26
-  //   4  matrix → (root)
+  // Mesh-sync bench test: node drives the two outer bars (bar1, bar4) --
+  // see the root branch above for the full split -- plus the two WS2801
+  // strips (strip_1, strip_2), which live on this board specifically to
+  // keep their SPI transmission on a different chip from the matrix's
+  // RMT work (see the WS2801-node-placement memory/decision). Pins 25/26
+  // for the bars (not 22/15) per physical wiring constraints -- needed to
+  // land on the same side as the 5V input pin. Safe to reuse here: the mux
+  // code (which normally claims GPIO 25/26 as S0/S1 on root) is compiled
+  // out entirely for the node build.
+  //
+  // WS2801 data/clock pins below are placeholders -- pick whatever's
+  // actually free and convenient once wired, then update here. Each
+  // WS2801 strip needs its own SPI peripheral (led_viz_init assigns
+  // SPI2_HOST/SPI3_HOST to clock_pins[5]/[6] in that order), so don't
+  // reuse a clock_pins entry across two strips.
+  //   0  bar_1    → GPIO 25          1  bar_2    → (root)
+  //   2  bar_3    → (root)           3  bar_4    → GPIO 26
+  //   4  matrix   → (root)
+  //   5  strip_1  → data GPIO 32, clock GPIO 33
+  //   6  strip_2  → data GPIO 27, clock GPIO 14
   LedVizConfig config = {
-      .gpio_pins = {25, 0, 0, 26, 0},
+      .gpio_pins = {25, 0, 0, 26, 0, 32, 27},
+      .clock_pins = {0, 0, 0, 0, 0, 33, 14},
       .target_fps = 60,
       .max_concurrent_refresh = 2,
   };

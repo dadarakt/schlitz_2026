@@ -16,8 +16,10 @@
 // Strip setup
 // ============================================================================
 
-// TESTING: 4 bars + matrix active, WS2801 strips not yet wired up.
 // Matrix must stay at index 4 -- noise.c and panel_pulse.c both hardcode it.
+// strip_1/strip_2 (WS2801, indices 5-6) live on the mesh node board -- see
+// main.c's node LedVizConfig. .position/.length_cm for them are estimates
+// (flanking the 4 bars at the outer edges) -- adjust once measured.
 const StripDef strip_setup[] = {
     {.num_leds = 142, .position = -0.9f, .length_cm = 100.0f},              // bar_1 (left outer)
     {.num_leds = 142, .position = -0.3f, .length_cm = 100.0f},              // bar_2 (left inner)
@@ -25,6 +27,8 @@ const StripDef strip_setup[] = {
     {.num_leds = 142, .position =  0.9f, .length_cm = 100.0f},              // bar_4 (right outer)
     {.num_leds = 256, .position =  0.0f, .length_cm = 32.0f,                // matrix (center)
      .matrix_width = 32, .matrix_height = 8},
+    {.num_leds = 50, .position = -1.0f, .length_cm = 35.0f},                // strip_1 (left, WS2801)
+    {.num_leds = 50, .position =  1.0f, .length_cm = 35.0f},                // strip_2 (right, WS2801)
 };
 const int NUM_STRIPS = sizeof(strip_setup) / sizeof(strip_setup[0]);
 
