@@ -38,6 +38,13 @@
 #define CU_MODE_DURATION_MIN_MS 6000.0
 #define CU_MODE_DURATION_MAX_MS 15000.0
 
+// Quantization for the *first* mode decision's seed (see shared.h's
+// quantize_sync_ms) -- generous relative to typical ESP-NOW propagation
+// delay + per-board frame polling jitter, so two mesh-synced boards
+// switching into this pattern a few ms apart still agree on the same
+// starting mode/duration.
+#define CU_SYNC_QUANTIZE_MS 250.0
+
 // Matrix patch grid -- must multiply out to CU_NUM_SEGMENTS.
 #define CU_MATRIX_COLS 4
 #define CU_MATRIX_ROWS 2
@@ -136,15 +143,23 @@ static double cu_step_ms(int strip_id, double mod1, double mod2) {
     return step;
 }
 
-static double cu_mode_duration(void) {
+// The global mode and its switch timing are the one piece of state every
+// panel -- and, in a multi-board mesh-sync setup, every board -- shares,
+// so unlike each strip's own step timing/color (still plain rand(), still
+// meant to vary independently), these two derive from deterministic_rand
+// seeded by an already-*agreed* schedule timestamp rather than "now". See
+// shared.h's deterministic_rand for why that distinction matters.
+static double cu_mode_duration(double seed_ms) {
     double span = CU_MODE_DURATION_MAX_MS - CU_MODE_DURATION_MIN_MS;
-    return CU_MODE_DURATION_MIN_MS + (double)(rand() % (int)span);
+    uint32_t r = deterministic_rand(seed_ms, 1);
+    return CU_MODE_DURATION_MIN_MS + (double)(r % (uint32_t)span);
 }
 
 // Picks a new mode, avoiding an immediate repeat of `avoid` for more
 // noticeable variety when the installation switches.
-static CUMode cu_pick_mode(CUMode avoid) {
-    CUMode next = (CUMode)(rand() % CU_MODE_COUNT);
+static CUMode cu_pick_mode(CUMode avoid, double seed_ms) {
+    uint32_t r = deterministic_rand(seed_ms, 2);
+    CUMode next = (CUMode)(r % CU_MODE_COUNT);
     if (next == avoid) {
         next = (CUMode)((next + 1) % CU_MODE_COUNT);
     }
@@ -257,19 +272,29 @@ static void count_up_update(double time_ms, PixelFunc pixel,
 
     // Stagger each strip's first step relative to actual entry time, rather
     // than all of them firing together on the first frame this pattern runs.
+    //
+    // The very first mode decision seeds from *quantized* real time (see
+    // shared.h) since this is the one place "now" legitimately has to enter
+    // the chain -- every subsequent decision below seeds from the schedule
+    // itself, never from "now" again, so a multi-board setup that agrees
+    // here stays in lockstep indefinitely without needing to re-agree.
     if (!cu_times_staggered) {
-        cu_global_mode = cu_pick_mode((CUMode)-1);
-        cu_next_mode_change_ms = time_ms + cu_mode_duration();
+        double seed = quantize_sync_ms(time_ms, CU_SYNC_QUANTIZE_MS);
+        cu_global_mode = cu_pick_mode((CUMode)-1, seed);
+        cu_next_mode_change_ms = seed + cu_mode_duration(seed);
         for (int k = 0; k < active_count; k++) {
             cu_reset_strip(&cu_state[strip_ids[k]], time_ms + k * 120.0, palette);
         }
         cu_times_staggered = true;
     }
 
-    // All panels switch mode together.
+    // All panels switch mode together. Seed from the schedule timestamp
+    // just reached (agreed on last cycle), not the current frame's
+    // time_ms -- see shared.h's deterministic_rand.
     if (time_ms >= cu_next_mode_change_ms) {
-        cu_global_mode = cu_pick_mode(cu_global_mode);
-        cu_next_mode_change_ms = time_ms + cu_mode_duration();
+        double seed = cu_next_mode_change_ms;
+        cu_global_mode = cu_pick_mode(cu_global_mode, seed);
+        cu_next_mode_change_ms = seed + cu_mode_duration(seed);
         for (int k = 0; k < active_count; k++) {
             cu_reset_strip(&cu_state[strip_ids[k]], time_ms, palette);
         }

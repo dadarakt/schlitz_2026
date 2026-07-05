@@ -10,8 +10,25 @@
 // ets_delay_us is always available as an ESP32 ROM function
 extern void ets_delay_us(unsigned int us);
 
-#include "../programs.c"
 #include "../effects.c"
+#include "../programs.c"
+
+#include "mesh/role.h"
+#ifdef MESH_ENABLED
+#if !defined(IS_ROOT)
+#error "MESH_ENABLED requires ROLE_ROOT or ROLE_NODE to also be defined"
+#endif
+#include "mesh/mesh_common.h"
+// Both mesh_root.c and mesh_node.c are always compiled and linked into
+// every build regardless of role (see src/CMakeLists.txt's blanket
+// src/*.* glob) -- mesh_common.c's espnow_init() picks which one to
+// actually start at runtime based on the is_root argument passed to
+// mesh_init() below. Both headers are therefore needed here unconditionally
+// so their (always-present) symbols type-check, even though only one path
+// is ever exercised on a given board.
+#include "mesh/mesh_node.h"
+#include "mesh/mesh_root.h"
+#endif
 
 static const char *TAG = "schlitzerei";
 
@@ -20,10 +37,16 @@ static const char *TAG = "schlitzerei";
 // ============================================================================
 
 static const Palette16 *palettes[] = {
-    &PALETTE_LAVA, &PALETTE_OCEAN, &PALETTE_FOREST,
-    &PALETTE_PARTY, &PALETTE_HEAT, &PALETTE_ROSE, &PALETTE_SUNSET,
+    &PALETTE_LAVA, &PALETTE_OCEAN, &PALETTE_FOREST, &PALETTE_PARTY,
+    &PALETTE_HEAT, &PALETTE_ROSE,  &PALETTE_SUNSET,
 };
 #define NUM_PALETTES ((int)(sizeof(palettes) / sizeof(palettes[0])))
+
+// advance_program/advance_palette (and the state they track) are root-only
+// -- root is the only board with buttons to trigger them, and the only one
+// that needs to track "current" program/palette at all (the node just
+// mirrors whatever mesh_node_apply_state is told).
+#if !defined(MESH_ENABLED) || IS_ROOT
 
 static int current_program_idx = 0;
 static int current_palette_idx = 0;
@@ -40,10 +63,56 @@ static void advance_palette(void) {
   ESP_LOGI(TAG, "Palette → %d", current_palette_idx);
 }
 
+#endif // !defined(MESH_ENABLED) || IS_ROOT
+
+// ============================================================================
+// Mesh sync: node-side state application
+//
+// mesh_node.c calls this (declared in mesh/mesh_node.h) whenever this
+// board's displayed program/palette/brightness should change -- at boot
+// before ever hearing from root, whenever a state broadcast arrives, and
+// whenever root is presumed lost (re-applied with the same values, just
+// connected=false). See mesh_node.h for the full contract.
+//
+// Defined unconditionally whenever MESH_ENABLED is set (both root and node
+// builds), since mesh_node.c is always compiled and linked in regardless of
+// role -- see the include comment above. In practice this only ever runs
+// on a node board: mesh_common.c's espnow_init() only calls
+// mesh_node_start() (and hence ever reaches this function) when is_root is
+// false, so it's simply dead code on a root board, never invoked.
+//
+// While not connected, brightness is dimmed to NODE_UNSYNCED_DIM_SCALE/255
+// of whatever it would otherwise be -- a soft cue for whoever is setting up
+// or debugging the installation (out-of-range root, root not started yet,
+// root mid-restart) without being jarring for an actual audience: the
+// program/palette itself never changes because of connectivity, only its
+// brightness does.
+// ============================================================================
+
+#ifdef MESH_ENABLED
+#define NODE_UNSYNCED_DIM_SCALE 100 // out of 255, ~40%
+
+void mesh_node_apply_state(uint8_t program_idx, uint8_t palette_idx,
+                           uint8_t brightness, bool connected) {
+  if (program_idx < NUM_PROGRAMS) {
+    led_viz_set_program(program_idx);
+  }
+  if (palette_idx < NUM_PALETTES) {
+    led_viz_set_palette(palettes[palette_idx]);
+  }
+  uint8_t effective =
+      connected ? brightness : scale8(brightness, NODE_UNSYNCED_DIM_SCALE);
+  led_viz_set_brightness(effective);
+}
+#endif
+
 // ============================================================================
 // Automode  (mirrors autoCyclePatterns/autoCyclePalettes in main.cpp, toggled
-// together by the button 0+1 combo)
+// together by the button 0+1 combo) -- root only, only triggered from
+// mux_update()'s button handling below.
 // ============================================================================
+
+#if !defined(MESH_ENABLED) || IS_ROOT
 
 #define AUTO_CYCLE_PATTERN_MS (177 * 1000)
 #define AUTO_CYCLE_PALETTE_MS (111 * 1000)
@@ -73,9 +142,16 @@ static void auto_mode_update(double now_ms) {
   }
 }
 
+#endif // !defined(MESH_ENABLED) || IS_ROOT
+
 // ============================================================================
-// Mux configuration  (mirrors MuxCfg in MuxInput.h)
+// Mux configuration + reading + button/pot handling  (mirrors MuxCfg /
+// MuxInput.cpp) -- root only. The node board has no physical controls of
+// its own; its program/palette/brightness are entirely driven by whatever
+// the root broadcasts (see mesh_node_apply_state above).
 // ============================================================================
+
+#if !defined(MESH_ENABLED) || IS_ROOT
 
 #define MUX_SIG_GPIO 35
 #define MUX_ADC_UNIT ADC_UNIT_1
@@ -97,10 +173,6 @@ static void auto_mode_update(double now_ms) {
 // BRI_MAX.
 #define BRI_MIN 0
 #define BRI_MAX 100
-
-// ============================================================================
-// Mux init / read
-// ============================================================================
 
 static void mux_select(uint8_t ch) {
   gpio_set_level(S0_GPIO, ch & 0x01);
@@ -140,10 +212,6 @@ static void mux_init(void) {
   };
   adc_oneshot_config_channel(s_adc_handle, MUX_ADC_CH, &chan_cfg);
 }
-
-// ============================================================================
-// Button + pot handling  (mirrors MuxInput.cpp logic)
-// ============================================================================
 
 static void mux_update(void) {
   static bool last_btn[4] = {false, false, false, false};
@@ -199,7 +267,17 @@ static void mux_update(void) {
     last_btn[i] = btn[i];
 
   auto_mode_update(now_ms);
+
+#if defined(MESH_ENABLED) && IS_ROOT
+  // Keep the other board's mesh_root_notify_state up to date -- cheap to
+  // call every tick, it only actually broadcasts on change (or its own
+  // periodic resend timer).
+  mesh_root_notify_state((uint8_t)current_program_idx,
+                         (uint8_t)current_palette_idx, (uint8_t)bri);
+#endif
 }
+
+#endif // !defined(MESH_ENABLED) || IS_ROOT
 
 // ============================================================================
 // LED task
@@ -217,7 +295,9 @@ static void led_task(void *arg) {
 void app_main(void) {
   ESP_LOGI(TAG, "Schlitzerei starting");
 
+#if !defined(MESH_ENABLED) || IS_ROOT
   mux_init();
+#endif
 
   // TESTING: 4 bars + matrix active, WS2801 strips not yet wired up
   //   0  bar_1  → GPIO 22   1  bar_2  → GPIO 23
@@ -244,16 +324,24 @@ void app_main(void) {
   led_viz_set_overlay(effects_overlay);
   led_viz_set_brightness(0); // start dark for fade-in
 
-  // Run LED loop in its own task so app_main can poll the mux.
-  // Pinned to core 1: app_main (and its ADC-based mux polling) is pinned to
-  // core 0 (CONFIG_ESP_MAIN_TASK_AFFINITY_CPU0), and classic ESP32's RMT has
-  // no DMA -- it refills its small hardware buffer via interrupt many times
+  // Run LED loop in its own task so app_main can poll the mux (or, on a
+  // node board, just idle).
+  // Pinned to core 1: app_main (and its ADC-based mux polling, root/default
+  // builds only) is pinned to core 0
+  // (CONFIG_ESP_MAIN_TASK_AFFINITY_CPU0), and classic ESP32's RMT has no
+  // DMA -- it refills its small hardware buffer via interrupt many times
   // per frame. Without an explicit affinity here, the scheduler could place
-  // this task on core 0 too, and an ADC read delaying that refill interrupt
-  // corrupts whatever bits were mid-flight, splicing a wrong color into a
-  // few LEDs. Keeping it off core 0 entirely avoids the contention.
+  // this task on core 0 too, and an ADC read (or, on a node board, WiFi/
+  // ESP-NOW handling) delaying that refill interrupt corrupts whatever bits
+  // were mid-flight, splicing a wrong color into a few LEDs. Keeping it off
+  // core 0 entirely avoids the contention.
   xTaskCreatePinnedToCore(led_task, "led", 8192, NULL, 5, NULL, 1);
 
+#ifdef MESH_ENABLED
+  mesh_init(IS_ROOT);
+#endif
+
+#if !defined(MESH_ENABLED) || IS_ROOT
   // Fade in over ~1 second before handing off to the pot
 #define FADEIN_MS 1000
 #define FADEIN_STEPS 50
@@ -270,4 +358,13 @@ void app_main(void) {
     mux_update();
     vTaskDelay(pdMS_TO_TICKS(10));
   }
+#else
+  // Node board: no physical controls to poll. mesh_node's own task (spawned
+  // above by mesh_init) applies the node's default/degraded state
+  // immediately and drives every subsequent program/palette/brightness
+  // change as root broadcasts arrive -- nothing left for app_main to do.
+  while (1) {
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+#endif
 }
