@@ -13,6 +13,7 @@
 // Unlike the original CrowdBlinder (always white), this samples a color
 // from the current palette once per press and holds it for that press.
 
+#include "effects.h"
 #include <led_viz_esp32.h>
 #include <stdlib.h>
 
@@ -62,6 +63,23 @@ static double flash_last_ms = -1.0;
 static RGB flash_color = {255, 255, 255};
 
 void flash_set_held(bool held) { flash_held = held; }
+
+// Mesh: root's current flash state, read by mesh_root_notify_state (main.c)
+// so it can be included in the periodic mesh state broadcast.
+bool flash_is_held(void) { return flash_held; }
+RGB flash_get_color(void) { return flash_color; }
+
+// Mesh: node mirrors root's exact flash state/color instead of picking its
+// own -- called from mesh_node.c's handle_state_msg whenever a state
+// broadcast arrives. Leaving flash_color_pending false (when held) means
+// flash_render's own color-pick below never runs on this board.
+void flash_apply_remote(bool held, RGB color) {
+    flash_held = held;
+    if (held) {
+        flash_color = color;
+        flash_color_pending = false;
+    }
+}
 
 static RGB blend_toward_white(RGB c, uint8_t amount) {
     c.r = qadd8(c.r, scale8((uint8_t)(255 - c.r), amount));

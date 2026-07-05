@@ -9,18 +9,24 @@
 // smoothly toward on/off (not an instant flip) for a more fluid look. Once
 // a full pass finishes, there's a brief all-off gap before a fresh pass
 // starts with new colors, a new random direction, and a new window size.
-// Step speed is modulated by mod1/mod2 plus randomness, as with the other
-// patterns.
+// Step speed is modulated by mod1/mod2 plus randomness.
 //
 // Bars show the gradient bottom to top (vertical); the matrix shows it
 // left to right across its columns (horizontal), uniform down each column
 // -- both assuming index/column 0 is the physically "low"/"left" end.
 // WS2801 strips aren't part of this pattern, and are cleared to black each
 // frame so nothing stale lingers from whichever pattern ran before this.
+//
+// Unlike Count Up, every stop here shares one single chase state (colors,
+// direction, window size, step timing) -- there's no per-stop independent
+// variety to begin with, so *all* of its randomness is derived via
+// deterministic_rand (see shared.h), seeded from schedule timestamps
+// rather than "now". That keeps a multi-board mesh-sync setup's two
+// halves of the chase showing the same colors and moving in the same
+// direction at the same time, with zero extra network messages.
 
 #include "shared.h"
 #include <led_viz.h>
-#include <stdlib.h>
 
 // Physical left-to-right order: bar1, bar2, matrix (id 4), bar3, bar4.
 #define GS_NUM_STOPS 5
@@ -35,6 +41,11 @@ static const int gs_stop_ids[GS_NUM_STOPS] = {0, 1, 4, 2, 3};
 
 #define GS_FADE_MS 160.0 // time to ease a stop fully on or fully off
 
+// Quantization for the very first cycle's seed (see shared.h's
+// quantize_sync_ms) -- generous relative to typical ESP-NOW propagation
+// delay + per-board frame polling jitter.
+#define GS_SYNC_QUANTIZE_MS 250.0
+
 static RGB gs_color_a = {0, 0, 0};
 static RGB gs_color_b = {0, 0, 0};
 static int gs_direction = 1;   // +1 = left to right, -1 = right to left
@@ -45,26 +56,33 @@ static double gs_last_frame_ms = -1.0;
 static float gs_brightness[GS_NUM_STOPS] = {0}; // per-stop 0..255, eased
 static bool gs_started = false;
 
-static double gs_step_ms(double mod1, double mod2) {
+// seed_ms is always an already-*agreed* schedule timestamp (never "now")
+// -- mod1/mod2 are recomputed from it here rather than passed in from the
+// caller's live time_ms, so the result is bit-identical across boards with
+// no dependency on per-board frame-timing jitter at all.
+static double gs_step_ms(double seed_ms) {
+    double mod1 = noise_mod1(seed_ms);
+    double mod2 = noise_mod2(seed_ms);
     double norm = ((mod1 + mod2) * 0.5 + 1.0) * 0.5; // combine both, 0..1
     double step = GS_MIN_STEP_MS + norm * (GS_MAX_STEP_MS - GS_MIN_STEP_MS);
-    step += (double)(rand() % 161) - 80.0; // +-80ms randomness
+    uint32_t r = deterministic_rand(seed_ms, 5);
+    step += (double)(r % 161) - 80.0; // +-80ms randomness
     if (step < 80.0) step = 80.0;
     return step;
 }
 
-static void gs_new_cycle(double time_ms, double mod1, double mod2,
-                         const Palette16 palette) {
-    uint8_t hue_a = (uint8_t)(rand() & 0xFF);
+static void gs_new_cycle(double seed_ms, const Palette16 palette) {
+    uint8_t hue_a = (uint8_t)(deterministic_rand(seed_ms, 1) & 0xFF);
     // Offset by roughly a third to two-thirds of the wheel for a clearly
     // contrasting second color, with some variety in exactly how far.
-    uint8_t hue_b = (uint8_t)(hue_a + 96 + (rand() % 64));
+    uint8_t hue_b = (uint8_t)(hue_a + 96 + (deterministic_rand(seed_ms, 2) % 64));
     gs_color_a = palette_sample(palette, hue_a, 255, true);
     gs_color_b = palette_sample(palette, hue_b, 255, true);
-    gs_direction = (rand() & 1) ? 1 : -1;
-    gs_window_size = GS_MIN_WINDOW + (rand() % (GS_MAX_WINDOW - GS_MIN_WINDOW + 1));
+    gs_direction = (deterministic_rand(seed_ms, 3) & 1) ? 1 : -1;
+    gs_window_size = GS_MIN_WINDOW + (deterministic_rand(seed_ms, 4) %
+                                      (GS_MAX_WINDOW - GS_MIN_WINDOW + 1));
     gs_level = 0;
-    gs_next_step_ms = time_ms + gs_step_ms(mod1, mod2);
+    gs_next_step_ms = seed_ms + gs_step_ms(seed_ms);
     for (int i = 0; i < GS_NUM_STOPS; i++) gs_brightness[i] = 0.0f;
 }
 
@@ -130,24 +148,28 @@ static void gs_init(void) {
 
 static void gradient_sweep_update(double time_ms, PixelFunc pixel,
                                   const Palette16 palette) {
-    double mod1 = noise_mod1(time_ms);
-    double mod2 = noise_mod2(time_ms);
-
+    // The very first cycle seeds from *quantized* real time (see shared.h)
+    // since this is the one place "now" legitimately has to enter the
+    // chain -- every decision after that seeds from the schedule itself,
+    // never from "now" again.
     if (!gs_started) {
-        gs_new_cycle(time_ms, mod1, mod2, palette);
+        gs_new_cycle(quantize_sync_ms(time_ms, GS_SYNC_QUANTIZE_MS), palette);
         gs_started = true;
     }
 
     int max_level = GS_NUM_STOPS + gs_window_size;
 
     if (time_ms >= gs_next_step_ms) {
+        // The schedule timestamp just reached, agreed on last cycle --
+        // seed from this, not the current frame's time_ms.
+        double event_time = gs_next_step_ms;
         if (gs_level >= max_level) {
             // Pass finished -- gap, then a fresh pass with new colors,
             // direction, and window size.
-            gs_new_cycle(time_ms + GS_GAP_MS, mod1, mod2, palette);
+            gs_new_cycle(event_time + GS_GAP_MS, palette);
         } else {
             gs_level++;
-            gs_next_step_ms = time_ms + gs_step_ms(mod1, mod2);
+            gs_next_step_ms = event_time + gs_step_ms(event_time);
         }
     }
 
