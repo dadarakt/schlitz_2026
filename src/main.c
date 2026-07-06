@@ -11,6 +11,7 @@
 extern void ets_delay_us(unsigned int us);
 
 #include "../effects.c"
+#include "../ws2801_ambient.c"
 #include "../programs.c"
 
 #include "mesh/role.h"
@@ -105,13 +106,24 @@ void mesh_node_apply_state(uint8_t program_idx, uint8_t palette_idx,
 }
 
 #if !IS_ROOT
-// Node builds compose the normal effects overlay (strobe/flash -- currently
-// always a no-op here, since those buttons only exist on root, but kept in
-// case they're ever synced to the node too) with the disconnected-state
-// glimmer, which runs after and fully overrides the display when this node
-// has no connection to root.
+// Node builds layer three overlays, in order:
+//   1. ws2801_ambient_overlay -- on a board with WS2801 strips (5/6),
+//      replaces whatever the active program drew on just those two with
+//      its own occasional background events (see ws2801_ambient.c) --
+//      they deliberately don't follow the fine-grained pattern. Safe
+//      no-op on boards without those strips (e.g. chain_node), since it
+//      only touches strip indices that actually exist.
+//   2. effects_overlay -- strobe/flash, currently always a no-op here
+//      since those buttons only exist on root, but kept in case they're
+//      ever synced to the node too; runs after ambient so flash/strobe
+//      still show on strips 5/6 too if that ever happens, rather than
+//      being hidden by the ambient effect.
+//   3. mesh_node_offline_overlay -- the disconnected-state glimmer, which
+//      runs last and fully overrides the display when this node has no
+//      connection to root.
 static void node_overlay(double time_ms, PixelFunc pixel, GetPixelFunc get_pixel,
                          const Palette16 palette) {
+  ws2801_ambient_overlay(time_ms, pixel, get_pixel, palette);
   effects_overlay(time_ms, pixel, get_pixel, palette);
   mesh_node_offline_overlay(time_ms, pixel, get_pixel, palette);
 }
@@ -338,16 +350,16 @@ void app_main(void) {
   // led_viz_init skips creating an RMT device for that strip index (see
   // led_viz_esp32.c's gpio_pin==0 handling) rather than treating it as an
   // error.
-  // Matrix moved off GPIO 2 to GPIO 15 -- GPIO 2 is an ESP32 strapping pin
-  // (sampled at boot for flash-mode selection), a plausible contributor to
-  // the matrix-only white-pixel flicker (bars, on ordinary GPIOs, never
-  // showed it). GPIO 15 is free here now that bar4 moved to the node
-  // board (was bar4's pin back when this board drove all 5 strips).
+  // Matrix back on its original GPIO 2 -- it was moved to GPIO 15 for a
+  // while to test whether GPIO 2 (an ESP32 strapping pin) was contributing
+  // to the matrix-only white-pixel flicker; that turned out not to be the
+  // cause (flicker persisted regardless), so no reason to keep it off its
+  // original pin.
   //   0  bar_1  → (node)    1  bar_2  → GPIO 23
   //   2  bar_3  → GPIO 4    3  bar_4  → (node)
-  //   4  matrix → GPIO 15
+  //   4  matrix → GPIO 2
   LedVizConfig config = {
-      .gpio_pins = {0, 23, 4, 0, 15},
+      .gpio_pins = {0, 23, 4, 0, 2},
       .target_fps = 60,
       .max_concurrent_refresh = 2,
   };

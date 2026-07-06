@@ -24,6 +24,15 @@
 #include <math.h>
 #include <stdlib.h>
 
+// Unlike the segment/gap-based patterns (Count Up, Wave, ...), the glimmer
+// texture lights every pixel at once, so the installation reads noticeably
+// brighter overall even though individual pixel brightness looks similar.
+// Cap glimmer brightness here rather than at the full 255 the sweep-overlay
+// headroom would otherwise allow -- keeps the noise's own bright/dark
+// contrast intact, just lowers the overall level (the additive white sweep
+// still layers on top of this, unaffected).
+#define SL_GLIMMER_BRIGHTNESS_SCALE 180 // out of 255
+
 #define SL_FB_MAX_LEDS 256
 static uint8_t sl_fb_r[7][SL_FB_MAX_LEDS];
 static uint8_t sl_fb_g[7][SL_FB_MAX_LEDS];
@@ -90,7 +99,7 @@ static void sl_glimmer_1d(int strip_id, int offset, double time_ms,
         if (v16 > 255) v16 = 255;
 
         uint8_t val = sl_sqrt16((uint16_t)(v16 * 257)); // gamma-ish
-        val = scale8(val, 220); // cap for sweep-overlay headroom
+        val = scale8(val, SL_GLIMMER_BRIGHTNESS_SCALE);
 
         // Plain wrapping add (not qadd8): idx is a rotating palette index,
         // not an accumulated brightness -- see noise.c's index/ihue fix.
@@ -125,7 +134,7 @@ static void sl_glimmer_matrix(double time_ms, double mod1,
             if (v16 > 255) v16 = 255;
 
             uint8_t val = sl_sqrt16((uint16_t)(v16 * 257));
-            val = scale8(val, 220);
+            val = scale8(val, SL_GLIMMER_BRIGHTNESS_SCALE);
 
             // Diagonal bias + scroll; wraps like the 1D idx above.
             uint8_t idx = (uint8_t)(n8 + x * 2 - y * 2 + scroll);

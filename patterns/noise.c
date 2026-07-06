@@ -17,6 +17,13 @@
 // FastLED's fadeToBlackBy(50) scales each channel via nscale8(255-50)=205.
 #define FADE_SCALE 205
 
+// Unlike the segment/gap-based patterns (Count Up, Wave, ...), every LED is
+// lit at once here, so the installation reads noticeably brighter overall
+// even though individual pixel brightness looks similar. Scale the final
+// per-pixel brightness down uniformly to compensate -- keeps the noise's own
+// bright/dark contrast intact, just lowers the overall level.
+#define NOISE_BRIGHTNESS_SCALE 150 // out of 255
+
 // Frame buffers – persist across frames to implement fade + additive blending
 #define FB_MAX_LEDS 256
 static uint8_t fb_r[7][FB_MAX_LEDS];
@@ -143,6 +150,7 @@ static void map_noise_to_matrix(int strip_id, int width, int height,
       // back to real values right after -- a visible hard cut every rotation.
       index = (uint8_t)(index + ihue);
       bri = (bri > 127) ? 255 : dim8_raw((uint8_t)(bri * 2));
+      bri = scale8(bri, NOISE_BRIGHTNESS_SCALE);
 
       RGB color = palette_sample(palette, index, bri, true);
       int led = get_matrix_index(strip_id, i, j);
@@ -176,6 +184,7 @@ static void map_noise_to_bar(int strip_id, int nscale, uint8_t ihue,
     // Plain wrapping add (not qadd8) -- see map_noise_to_matrix for why.
     index = (uint8_t)(index + ihue);
     bri = (bri > 127) ? 255 : dim8_raw((uint8_t)(bri * 2));
+    bri = scale8(bri, NOISE_BRIGHTNESS_SCALE);
 
     RGB color = palette_sample(palette, index, bri, true);
 
