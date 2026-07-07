@@ -24,6 +24,12 @@
 // relative to the addition rate. Retune this by eye against hardware.
 #define WAVE_FADE_SCALE 205
 
+// Up to WAVE_MAX_WAVES full-brightness waves can overlap and additively
+// blend (see wave_add_scaled) with no upper bound on how many are lit at
+// once -- reads brighter overall than the other patterns. Scale each
+// wave's own color down at spawn time to compensate.
+#define WAVE_BRIGHTNESS_SCALE 170 // out of 255
+
 typedef struct {
     double start_time_ms;
     double duration_ms;
@@ -64,7 +70,7 @@ static void wave_spawn(double time_ms, const Palette16 palette) {
 
     Wave *w = &wave_list[wave_count++];
     w->start_time_ms = time_ms;
-    w->color = palette_sample(palette, (uint8_t)(rand() & 0xFF), 255, true);
+    w->color = palette_sample(palette, (uint8_t)(rand() & 0xFF), WAVE_BRIGHTNESS_SCALE, true);
     w->feather_width = (float)wave_rand_range(3, 20);
     w->duration_ms = (double)wave_rand_range(1000, 4000);
 

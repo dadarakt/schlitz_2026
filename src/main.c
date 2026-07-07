@@ -249,25 +249,25 @@ static void mux_update(void) {
   led_viz_set_brightness((uint8_t)bri);
 
   // --- Buttons 0 & 1: trigger on RELEASE, detect combo ---
-  if (btn[0] && btn[1])
-    combo_active = true;
+  // A person never releases two physical buttons in the exact same poll
+  // tick -- one always lands a beat before the other. Fire the toggle once
+  // BOTH are confirmed up (checked directly each tick, not edge-triggered
+  // off either specific button), whichever released first; individual
+  // single-button actions are suppressed for the whole overlap, from the
+  // moment both are first seen held together until both are back up.
+  bool released0 = !btn[0] && last_btn[0];
+  bool released1 = !btn[1] && last_btn[1];
 
-  // Button 0 released
-  if (!btn[0] && last_btn[0]) {
-    if (combo_active && !btn[1]) {
-      // both were held together, now both released → toggle automode
+  if (combo_active) {
+    if (!btn[0] && !btn[1]) {
       auto_mode_toggle(now_ms);
       combo_active = false;
-    } else if (!combo_active) {
-      advance_program();
     }
-  }
-
-  // Button 1 released
-  if (!btn[1] && last_btn[1]) {
-    if (!combo_active) {
-      advance_palette();
-    }
+  } else if (btn[0] && btn[1]) {
+    combo_active = true;
+  } else {
+    if (released0) advance_program();
+    if (released1) advance_palette();
   }
 
   // --- Button 2: Flash (while held) ---

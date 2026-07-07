@@ -103,9 +103,9 @@
 // Split/merge flourish: briefly blends toward white within this radius of
 // the resulting cell(s)' center, decaying continuously by this factor
 // every second (e.g. 0.18 means it's down to 18% of its peak after 1s).
-#define CHAOS_FLASH_RADIUS_PX 5.5f
+#define CHAOS_FLASH_RADIUS_PX 4.0f
 #define CHAOS_FLASH_DECAY_PER_SEC 0.18f
-#define CHAOS_FLASH_MAX_WHITE 230 // out of 255, blended in at full flash + dead center
+#define CHAOS_FLASH_MAX_WHITE 170 // out of 255, blended in at full flash + dead center
 
 // Indexed directly by strip id (0-3 bars, 4 matrix, 5-6 WS2801 strips)
 #define CHAOS_NUM_STRIP_SLOTS 7

@@ -244,11 +244,28 @@ static double cu_mode_duration(double seed_ms) {
     return CU_MODE_DURATION_MIN_MS + (double)(r % (uint32_t)span);
 }
 
+// Weighted so CU_MODE_RANDOM (a busy, flickery mode) comes up noticeably
+// less often than the other three, calmer ones -- order matches the CUMode
+// enum (UP, DOWN, RANDOM, SLIDE).
+static const int CU_MODE_WEIGHTS[CU_MODE_COUNT] = {3, 3, 1, 3};
+
 // Picks a new mode, avoiding an immediate repeat of `avoid` for more
 // noticeable variety when the installation switches.
 static CUMode cu_pick_mode(CUMode avoid, double seed_ms) {
+    int total_weight = 0;
+    for (int i = 0; i < CU_MODE_COUNT; i++) total_weight += CU_MODE_WEIGHTS[i];
+
     uint32_t r = deterministic_rand(seed_ms, 2);
-    CUMode next = (CUMode)(r % CU_MODE_COUNT);
+    int roll = (int)(r % (uint32_t)total_weight);
+    CUMode next = CU_MODE_UP;
+    int acc = 0;
+    for (int i = 0; i < CU_MODE_COUNT; i++) {
+        acc += CU_MODE_WEIGHTS[i];
+        if (roll < acc) {
+            next = (CUMode)i;
+            break;
+        }
+    }
     if (next == avoid) {
         next = (CUMode)((next + 1) % CU_MODE_COUNT);
     }
@@ -450,6 +467,22 @@ static void count_up_update(double time_ms, PixelFunc pixel,
     static const int strip_ids[] = {0, 1, 2, 3, 4, 5, 6};
     const int active_count = (int)(sizeof(strip_ids) / sizeof(strip_ids[0]));
 
+    // A mesh node board's clock can jump backward by seconds the moment
+    // PTP sync first completes (mesh_node.c's led_viz_set_clock_offset_us)
+    // -- root's clock is never adjusted, but a node that's had more uptime
+    // than root at that moment (e.g. root got reflashed/rebooted more
+    // recently) gets a negative correction. If Count Up already seeded
+    // cu_next_mode_change_ms/each strip's next_step_ms from the larger
+    // pre-sync clock, a backward jump strands those thresholds in what's
+    // now the "future", freezing every strip's stepping until real elapsed
+    // time grows back past them -- looks exactly like a stuck pattern.
+    // Detect the jump and force a full re-seed from the corrected clock.
+    static double cu_last_seen_time_ms = -1.0;
+    if (cu_last_seen_time_ms >= 0.0 && time_ms < cu_last_seen_time_ms - 1000.0) {
+        cu_times_staggered = false;
+    }
+    cu_last_seen_time_ms = time_ms;
+
     // Stagger each strip's first step relative to actual entry time, rather
     // than all of them firing together on the first frame this pattern runs.
     //
@@ -462,7 +495,17 @@ static void count_up_update(double time_ms, PixelFunc pixel,
         double seed = quantize_sync_ms(time_ms, CU_SYNC_QUANTIZE_MS);
         cu_global_mode = cu_pick_mode((CUMode)-1, seed);
         cu_next_mode_change_ms = seed + cu_mode_duration(seed);
-        cu_enter_cycle(cu_pick_lockstep(seed), cu_pick_slide_width(seed), time_ms,
+        // Never lockstep on this very first cycle specifically (every later
+        // cycle still rolls it normally). On a real board whose clock is
+        // never adjusted (root, or any standalone build), time_ms is always
+        // genuinely ~0 the first time this ever runs, so this seed -- and
+        // thus whatever mode+lockstep it deterministically picks -- would
+        // otherwise be the *exact same* combination on every single boot.
+        // Landing on CU_MODE_RANDOM (mostly idle/dark, brief rare bursts --
+        // see CU_RANDOM_BURST_CHANCE_PERCENT) plus lockstep (one shared mask
+        // for every panel) reads as the whole installation stuck static for
+        // this cycle's full ~18-35s duration, every time.
+        cu_enter_cycle(false, cu_pick_slide_width(seed), time_ms,
                        strip_ids, active_count, palette);
         cu_times_staggered = true;
     }
