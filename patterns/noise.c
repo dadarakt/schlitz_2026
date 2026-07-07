@@ -134,6 +134,23 @@ static void fb_fade_all(void) {
   }
 }
 
+// Each frame adds a freshly-sampled color on top of the still-fading
+// leftover from previous frames (see fb_fade_all/qadd8 below) -- since the
+// noise walk rotates the hue over time, a pixel can end up with several
+// different hues' contributions summed together before they fully decay,
+// pushing all three channels up at once and reading as a wash of white
+// rather than a blend of colors. Subtracting the shared (achromatic)
+// component back out restores saturation without touching the relative
+// hue difference between channels.
+static void fb_desaturate(uint8_t *r, uint8_t *g, uint8_t *b) {
+  uint8_t m = *r;
+  if (*g < m) m = *g;
+  if (*b < m) m = *b;
+  *r = (uint8_t)(*r - m);
+  *g = (uint8_t)(*g - m);
+  *b = (uint8_t)(*b - m);
+}
+
 // Matrix: sample from the precomputed 32-wide noise field -- fits exactly,
 // so no wraparound/repeat.
 static void map_noise_to_matrix(int strip_id, int width, int height,
@@ -158,6 +175,7 @@ static void map_noise_to_matrix(int strip_id, int width, int height,
       fb_r[strip_id][led] = qadd8(fb_r[strip_id][led], color.r);
       fb_g[strip_id][led] = qadd8(fb_g[strip_id][led], color.g);
       fb_b[strip_id][led] = qadd8(fb_b[strip_id][led], color.b);
+      fb_desaturate(&fb_r[strip_id][led], &fb_g[strip_id][led], &fb_b[strip_id][led]);
     }
   }
 }
@@ -191,6 +209,7 @@ static void map_noise_to_bar(int strip_id, int nscale, uint8_t ihue,
     fb_r[strip_id][i] = qadd8(fb_r[strip_id][i], color.r);
     fb_g[strip_id][i] = qadd8(fb_g[strip_id][i], color.g);
     fb_b[strip_id][i] = qadd8(fb_b[strip_id][i], color.b);
+    fb_desaturate(&fb_r[strip_id][i], &fb_g[strip_id][i], &fb_b[strip_id][i]);
   }
 }
 

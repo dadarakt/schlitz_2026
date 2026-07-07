@@ -48,7 +48,6 @@ const int NUM_STRIPS = sizeof(strip_setup) / sizeof(strip_setup[0]);
 // Patterns
 // ============================================================================
 
-#include "patterns/sync_pulse.c"
 #include "patterns/noise.c"
 #include "patterns/panel_pulse.c"
 #include "patterns/drop.c"
@@ -62,9 +61,6 @@ const int NUM_STRIPS = sizeof(strip_setup) / sizeof(strip_setup[0]);
 // ============================================================================
 
 const Program programs[] = {
-    // First/default for now -- quick, obvious visual check while testing
-    // mesh sync across boards (see sync_pulse.c).
-    {"Sync Pulse",     sync_pulse_update,     sp_init, sp_init},
     {"Count Up",       count_up_update,       cu_init, cu_init},
     {"Gradient Sweep", gradient_sweep_update, gs_init, gs_init},
     {"Noise",          noise_update,          NULL,    NULL   },
