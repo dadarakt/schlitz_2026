@@ -76,6 +76,7 @@ const int NUM_PALETTES = sizeof(palette_registry) / sizeof(palette_registry[0]);
 #include "patterns/searchlight.c"
 #include "patterns/count_up.c"
 #include "patterns/gradient_sweep.c"
+#include "patterns/chaos.c"
 
 // ============================================================================
 // Program registry
@@ -90,5 +91,6 @@ const Program programs[] = {
     {"Drop",           drop_update,           drop_init, drop_init},
     {"Wave",           wave_update,           wave_init, wave_init},
     {"Searchlight",    searchlight_update,    sl_init, sl_init},
+    {"Chaos",          chaos_update,          chaos_init, chaos_init},
 };
 const int NUM_PROGRAMS = sizeof(programs) / sizeof(programs[0]);

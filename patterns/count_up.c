@@ -79,6 +79,14 @@
 #define CU_SLIDE_WIDTH_MIN 2
 #define CU_SLIDE_WIDTH_MAX 3
 
+// CU_MODE_RANDOM's flicker isn't continuous -- most steps it stays dark,
+// with an occasional short burst of rapid flickering instead. Each strip
+// rolls independently (plain rand(), like its own step timing/color
+// already do), so bursts don't line up across strips either.
+#define CU_RANDOM_BURST_CHANCE_PERCENT 12 // out of 100, per idle step
+#define CU_RANDOM_BURST_STEPS_MIN 2
+#define CU_RANDOM_BURST_STEPS_MAX 5
+
 // Chance (out of 100) that a given mode cycle also puts every panel into
 // lockstep -- one shared state (color/level/phase) instead of each strip
 // running its own. Rolled fresh alongside every mode change.
@@ -113,8 +121,14 @@ typedef struct {
     int direction;          // +1/-1, which way the SLIDE window is currently
                             // moving (unused by other modes)
     uint16_t random_mask;   // bit i = segment i lit, for RANDOM (up to 16)
+    int random_burst_steps_left; // >0 while RANDOM is mid-flicker-burst, 0 = idle/dark
     double next_step_ms;    // next count-step / random-refresh time
-    RGB color;
+    // A palette index rather than a materialized RGB -- resampled from the
+    // *current* palette every frame at render time (see cu_render_strip/
+    // cu_render_matrix) instead of once when picked, so a palette change
+    // shows up immediately like every other pattern, rather than waiting
+    // for this strip's counting cycle to complete.
+    uint8_t hue;
 } CUStrip;
 
 static CUStrip cu_state[CU_NUM_STRIP_SLOTS]; // used unless cu_lockstep
@@ -251,21 +265,33 @@ static int cu_pick_slide_width(double seed_ms) {
 }
 
 static void cu_reset_strip(CUStrip *s, double time_ms, const Palette16 palette) {
+    (void)palette; // no longer sampled here -- see CUStrip.hue
     s->level = 0;
     s->direction = 1;
     s->random_mask = 0;
-    s->color = palette_sample(palette, (uint8_t)(rand() & 0xFF), 255, true);
+    s->random_burst_steps_left = 0;
+    s->hue = (uint8_t)(rand() & 0xFF);
     s->next_step_ms = time_ms;
 }
 
 static void cu_advance(CUStrip *s, int strip_id, double time_ms, double mod1,
-                       double mod2, int num_segments, const Palette16 palette) {
+                       double mod2, int num_segments) {
     if (time_ms < s->next_step_ms) return;
 
     double step = cu_step_ms(strip_id, mod1, mod2);
 
     if (cu_global_mode == CU_MODE_RANDOM) {
-        s->random_mask = (uint16_t)(rand() & 0xFFFF);
+        if (s->random_burst_steps_left > 0) {
+            s->random_mask = (uint16_t)(rand() & 0xFFFF);
+            s->random_burst_steps_left--;
+        } else {
+            s->random_mask = 0;
+            if ((rand() % 100) < CU_RANDOM_BURST_CHANCE_PERCENT) {
+                s->random_burst_steps_left =
+                    CU_RANDOM_BURST_STEPS_MIN +
+                    (rand() % (CU_RANDOM_BURST_STEPS_MAX - CU_RANDOM_BURST_STEPS_MIN + 1));
+            }
+        }
         s->next_step_ms = time_ms + step;
         return;
     }
@@ -298,7 +324,7 @@ static void cu_advance(CUStrip *s, int strip_id, double time_ms, double mod1,
     int max_level = 2 * num_segments;
     if (s->level >= max_level) {
         s->level = 0;
-        s->color = palette_sample(palette, (uint8_t)(rand() & 0xFF), 255, true);
+        s->hue = (uint8_t)(rand() & 0xFF);
         s->next_step_ms = time_ms + step;
     } else {
         s->level++;
@@ -330,18 +356,19 @@ static bool cu_segment_lit(const CUStrip *s, int seg, int num_segments) {
 }
 
 static void cu_render_strip(int strip_id, const CUStrip *s, int num_segments,
-                            PixelFunc pixel) {
+                            PixelFunc pixel, const Palette16 palette) {
     int n = get_strip_num_leds(strip_id);
     if (n <= 0) return;
 
     int starts[CU_MAX_SEGMENTS], lens[CU_MAX_SEGMENTS];
     cu_compute_segments(n, num_segments, starts, lens);
 
+    RGB lit_color = palette_sample(palette, s->hue, 255, true);
     for (int i = 0; i < n; i++) {
         RGB c = {0, 0, 0};
         for (int seg = 0; seg < num_segments; seg++) {
             if (i >= starts[seg] && i < starts[seg] + lens[seg]) {
-                if (cu_segment_lit(s, seg, num_segments)) c = s->color;
+                if (cu_segment_lit(s, seg, num_segments)) c = lit_color;
                 break;
             }
         }
@@ -350,7 +377,7 @@ static void cu_render_strip(int strip_id, const CUStrip *s, int num_segments,
 }
 
 static void cu_render_matrix(int strip_id, const CUStrip *s, int num_segments,
-                             PixelFunc pixel) {
+                             PixelFunc pixel, const Palette16 palette) {
     int width = get_matrix_width(strip_id);
     int height = get_matrix_height(strip_id);
     if (width <= 0 || height <= 0) return;
@@ -359,12 +386,13 @@ static void cu_render_matrix(int strip_id, const CUStrip *s, int num_segments,
     int y0[CU_MAX_SEGMENTS], y1[CU_MAX_SEGMENTS];
     cu_compute_matrix_patches(width, height, num_segments, x0, x1, y0, y1);
 
+    RGB lit_color = palette_sample(palette, s->hue, 255, true);
     for (int x = 0; x < width; x++) {
         for (int y = 0; y < height; y++) {
             RGB c = {0, 0, 0};
             for (int p = 0; p < num_segments; p++) {
                 if (x >= x0[p] && x < x1[p] && y >= y0[p] && y < y1[p]) {
-                    if (cu_segment_lit(s, p, num_segments)) c = s->color;
+                    if (cu_segment_lit(s, p, num_segments)) c = lit_color;
                     break;
                 }
             }
@@ -379,14 +407,16 @@ static void cu_init(void) {
         cu_state[i].level = 0;
         cu_state[i].direction = 1;
         cu_state[i].random_mask = 0;
+        cu_state[i].random_burst_steps_left = 0;
         cu_state[i].next_step_ms = 0.0;
-        cu_state[i].color = (RGB){0, 0, 0};
+        cu_state[i].hue = 0;
     }
     cu_shared_state.level = 0;
     cu_shared_state.direction = 1;
     cu_shared_state.random_mask = 0;
+    cu_shared_state.random_burst_steps_left = 0;
     cu_shared_state.next_step_ms = 0.0;
-    cu_shared_state.color = (RGB){0, 0, 0};
+    cu_shared_state.hue = 0;
     cu_lockstep = false;
     cu_slide_width = CU_SLIDE_WIDTH_MIN;
     cu_global_mode = CU_MODE_UP;
@@ -449,7 +479,7 @@ static void count_up_update(double time_ms, PixelFunc pixel,
     }
 
     if (cu_lockstep) {
-        cu_advance(&cu_shared_state, 0, time_ms, mod1, mod2, num_segments, palette);
+        cu_advance(&cu_shared_state, 0, time_ms, mod1, mod2, num_segments);
     }
 
     for (int k = 0; k < active_count; k++) {
@@ -458,13 +488,13 @@ static void count_up_update(double time_ms, PixelFunc pixel,
         if (cu_lockstep) {
             s = &cu_shared_state;
         } else {
-            cu_advance(&cu_state[id], id, time_ms, mod1, mod2, num_segments, palette);
+            cu_advance(&cu_state[id], id, time_ms, mod1, mod2, num_segments);
             s = &cu_state[id];
         }
         if (id == 4) {
-            cu_render_matrix(id, s, num_segments, pixel);
+            cu_render_matrix(id, s, num_segments, pixel, palette);
         } else {
-            cu_render_strip(id, s, num_segments, pixel);
+            cu_render_strip(id, s, num_segments, pixel, palette);
         }
     }
 }
