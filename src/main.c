@@ -33,15 +33,8 @@ extern void ets_delay_us(unsigned int us);
 
 static const char *TAG = "schlitzerei";
 
-// ============================================================================
-// Palette list
-// ============================================================================
-
-static const Palette16 *palettes[] = {
-    &PALETTE_LAVA, &PALETTE_OCEAN, &PALETTE_FOREST, &PALETTE_PARTY,
-    &PALETTE_HEAT, &PALETTE_ROSE,  &PALETTE_SUNSET,
-};
-#define NUM_PALETTES ((int)(sizeof(palettes) / sizeof(palettes[0])))
+// Palette list (palette_registry/NUM_PALETTES) now lives in programs.c --
+// shared with the desktop simulator instead of duplicated here.
 
 // advance_program/advance_palette (and the state they track) are root-only
 // -- root is the only board with buttons to trigger them, and the only one
@@ -60,7 +53,7 @@ static void advance_program(void) {
 
 static void advance_palette(void) {
   current_palette_idx = (current_palette_idx + 1) % NUM_PALETTES;
-  led_viz_set_palette(palettes[current_palette_idx]);
+  led_viz_set_palette(palette_registry[current_palette_idx].palette);
   ESP_LOGI(TAG, "Palette → %d", current_palette_idx);
 }
 
@@ -100,7 +93,7 @@ void mesh_node_apply_state(uint8_t program_idx, uint8_t palette_idx,
     led_viz_set_program(program_idx);
   }
   if (palette_idx < NUM_PALETTES) {
-    led_viz_set_palette(palettes[palette_idx]);
+    led_viz_set_palette(palette_registry[palette_idx].palette);
   }
   led_viz_set_brightness(brightness);
 }
@@ -409,7 +402,7 @@ void app_main(void) {
   }
 
   led_viz_set_program(0);
-  led_viz_set_palette(palettes[0]);
+  led_viz_set_palette(palette_registry[0].palette);
 #if defined(MESH_ENABLED) && !IS_ROOT
   led_viz_set_overlay(node_overlay);
 #else

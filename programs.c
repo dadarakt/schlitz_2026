@@ -45,6 +45,26 @@ const StripDef strip_setup[] = {
 const int NUM_STRIPS = sizeof(strip_setup) / sizeof(strip_setup[0]);
 
 // ============================================================================
+// Palette registry
+// ============================================================================
+
+// The palettes actually used on the installation (mirrors what
+// src/main.c's mux-driven palette cycling and mesh state sync select
+// between) -- defined here instead of relying on the SDK's built-in
+// default registry so it's a single, hot-reloadable, program-defined list
+// shared by both the desktop simulator and the real firmware. Order
+// matters: mesh root/node exchange palettes as a plain index into this
+// array, so it must stay in sync across every board (they already are,
+// since both share this file).
+const PaletteEntry palette_registry[] = {
+    {"Lava", &PALETTE_LAVA},     {"Ocean", &PALETTE_OCEAN},
+    {"Forest", &PALETTE_FOREST}, {"Party", &PALETTE_PARTY},
+    {"Heat", &PALETTE_HEAT},     {"Rose", &PALETTE_ROSE},
+    {"Sunset", &PALETTE_SUNSET},
+};
+const int NUM_PALETTES = sizeof(palette_registry) / sizeof(palette_registry[0]);
+
+// ============================================================================
 // Patterns
 // ============================================================================
 
