@@ -49,6 +49,7 @@ const int NUM_STRIPS = sizeof(strip_setup) / sizeof(strip_setup[0]);
 // ============================================================================
 
 #include "patterns/noise.c"
+#include "patterns/sine.c"
 #include "patterns/panel_pulse.c"
 #include "patterns/drop.c"
 #include "patterns/wave.c"
@@ -64,6 +65,7 @@ const Program programs[] = {
     {"Count Up",       count_up_update,       cu_init, cu_init},
     {"Gradient Sweep", gradient_sweep_update, gs_init, gs_init},
     {"Noise",          noise_update,          NULL,    NULL   },
+    {"Sine",           sine_update,           NULL,    NULL   },
     {"Panel Pulse",    panel_pulse_update,    pp_init, pp_init},
     {"Drop",           drop_update,           drop_init, drop_init},
     {"Wave",           wave_update,           wave_init, wave_init},
